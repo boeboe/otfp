@@ -16,7 +16,7 @@ import (
 )
 
 const (
-	protocolName = "DNP3 (TCP)"
+	protocolName = core.ProtocolDNP3
 
 	// DNP3 link-layer constants.
 	startByte1 byte = 0x05
@@ -44,10 +44,13 @@ func New() *Fingerprinter {
 	return &Fingerprinter{}
 }
 
-// Name returns the protocol name.
-func (f *Fingerprinter) Name() string {
+// Name returns the protocol identifier.
+func (f *Fingerprinter) Name() core.Protocol {
 	return protocolName
 }
+
+// Priority returns the detection order (lower = tested first).
+func (f *Fingerprinter) Priority() int { return 50 }
 
 // Detect attempts to identify DNP3 on the target by sending a Link Status
 // Request and validating the response.

@@ -2,8 +2,12 @@ package main
 
 import (
 	"context"
+	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
+	"io"
+	"log/slog"
 	"os"
 	"strings"
 	"time"
@@ -21,7 +25,7 @@ import (
 	"github.com/boeboe/otfp/protocols/s7"
 )
 
-// Version information, injected at build time via ldflags.
+// Build-time variables injected via ldflags.
 var (
 	Version   = "dev"
 	Branch    = "unknown"
@@ -30,6 +34,7 @@ var (
 	BuildDate = "unknown"
 )
 
+// Exit codes — stable numeric API for callers.
 const (
 	exitDetected  = 0
 	exitUnknown   = 1
@@ -37,83 +42,158 @@ const (
 	exitBadParams = 3
 )
 
-// protocolAliases maps CLI-friendly names to registered protocol names.
-var protocolAliases = map[string]string{
-	"modbus":   "Modbus TCP",
-	"mms":      "IEC 61850 MMS",
-	"s7":       "Siemens S7comm",
-	"opcua":    "OPC UA",
-	"bacnet":   "BACnet/IP",
-	"can":      "CAN (TCP Gateway)",
-	"profinet": "PROFINET (Ethernet)",
-	"dnp3":     "DNP3 (TCP)",
-	"iec104":   "IEC 60870-5-104",
-	"enip":     "EtherNet/IP",
+// protocolAliases maps short CLI names to typed Protocol identifiers.
+var protocolAliases = map[string]core.Protocol{
+	"modbus":   core.ProtocolModbus,
+	"mms":      core.ProtocolMMS,
+	"s7":       core.ProtocolS7,
+	"opcua":    core.ProtocolOPCUA,
+	"bacnet":   core.ProtocolBACnet,
+	"can":      core.ProtocolCAN,
+	"profinet": core.ProtocolPROFINET,
+	"dnp3":     core.ProtocolDNP3,
+	"iec104":   core.ProtocolIEC104,
+	"enip":     core.ProtocolENIP,
 }
 
 func main() {
-	ip := flag.String("ip", "", "Target IP address (required)")
-	port := flag.Int("port", 0, "Target TCP port (required)")
-	check := flag.String("check", "", "Check specific protocol: modbus, mms, s7, opcua, bacnet, can, profinet, dnp3, iec104, enip")
-	timeout := flag.Duration("timeout", 5*time.Second, "Connection timeout")
-	verbose := flag.Bool("verbose", false, "Show detailed detection info")
-	parallel := flag.Bool("parallel", true, "Run protocol checks in parallel")
-	showVersion := flag.Bool("version", false, "Print version information and exit")
+	os.Exit(run(os.Args[1:], os.Stdout, os.Stderr))
+}
 
-	flag.Usage = func() {
-		fmt.Fprintf(os.Stderr, "Usage: ot-discover --ip <address> --port <port> [options]\n\n")
-		fmt.Fprintf(os.Stderr, "OT Protocol Fingerprinting Tool\n\n")
-		fmt.Fprintf(os.Stderr, "Options:\n")
-		flag.PrintDefaults()
-		fmt.Fprintf(os.Stderr, "\nSupported protocols for --check:\n")
-		fmt.Fprintf(os.Stderr, "  modbus    Modbus TCP\n")
-		fmt.Fprintf(os.Stderr, "  mms       IEC 61850 MMS (ISO-on-TCP)\n")
-		fmt.Fprintf(os.Stderr, "  s7        Siemens S7comm\n")
-		fmt.Fprintf(os.Stderr, "  opcua     OPC UA (Binary)\n")
-		fmt.Fprintf(os.Stderr, "  bacnet    BACnet/IP (BVLL)\n")
-		fmt.Fprintf(os.Stderr, "  can       CAN TCP Gateway (SLCAN)\n")
-		fmt.Fprintf(os.Stderr, "  profinet  PROFINET (DCE/RPC)\n")
-		fmt.Fprintf(os.Stderr, "  dnp3      DNP3 over TCP\n")
-		fmt.Fprintf(os.Stderr, "  iec104    IEC 60870-5-104\n")
-		fmt.Fprintf(os.Stderr, "  enip      EtherNet/IP (CIP)\n")
-		fmt.Fprintf(os.Stderr, "\nExit codes:\n")
-		fmt.Fprintf(os.Stderr, "  0  Protocol detected\n")
-		fmt.Fprintf(os.Stderr, "  1  Unknown protocol\n")
-		fmt.Fprintf(os.Stderr, "  2  Connection error\n")
-		fmt.Fprintf(os.Stderr, "  3  Invalid parameters\n")
+// run is the real entry point. Returning an int keeps main() trivially testable.
+func run(args []string, stdout, stderr io.Writer) int {
+	// ---- flag parsing ----
+	fs := flag.NewFlagSet("ot-discover", flag.ContinueOnError)
+	fs.SetOutput(stderr)
+
+	ip := fs.String("ip", "", "Target IP address (required)")
+	port := fs.Int("port", 0, "Target TCP port (required)")
+	check := fs.String("check", "", "Check specific protocol: modbus, mms, s7, opcua, bacnet, can, profinet, dnp3, iec104, enip")
+	timeout := fs.Duration("timeout", 5*time.Second, "Per-protocol connection timeout")
+	globalTimeout := fs.Duration("global-timeout", 0, "Overall timeout for the entire run (0 = unlimited)")
+	verbose := fs.Bool("verbose", false, "Show detailed detection info")
+	parallel := fs.Bool("parallel", true, "Run protocol checks in parallel")
+	safe := fs.Bool("safe", false, "OT-safe mode: sequential, low concurrency, conservative timeouts")
+	output := fs.String("output", "text", "Output format: text or json")
+	showVersion := fs.Bool("version", false, "Print version information and exit")
+
+	fs.Usage = func() {
+		_, _ = fmt.Fprintf(stderr, "Usage: ot-discover --ip <address> --port <port> [options]\n\n")
+		_, _ = fmt.Fprintf(stderr, "OT Protocol Fingerprinting Tool\n\n")
+		_, _ = fmt.Fprintf(stderr, "Options:\n")
+		fs.PrintDefaults()
+		_, _ = fmt.Fprintf(stderr, "\nSupported protocols for --check:\n")
+		_, _ = fmt.Fprintf(stderr, "  modbus    Modbus TCP\n")
+		_, _ = fmt.Fprintf(stderr, "  mms       IEC 61850 MMS (ISO-on-TCP)\n")
+		_, _ = fmt.Fprintf(stderr, "  s7        Siemens S7comm\n")
+		_, _ = fmt.Fprintf(stderr, "  opcua     OPC UA (Binary)\n")
+		_, _ = fmt.Fprintf(stderr, "  bacnet    BACnet/IP (BVLL)\n")
+		_, _ = fmt.Fprintf(stderr, "  can       CAN TCP Gateway (SLCAN)\n")
+		_, _ = fmt.Fprintf(stderr, "  profinet  PROFINET (DCE/RPC)\n")
+		_, _ = fmt.Fprintf(stderr, "  dnp3      DNP3 over TCP\n")
+		_, _ = fmt.Fprintf(stderr, "  iec104    IEC 60870-5-104\n")
+		_, _ = fmt.Fprintf(stderr, "  enip      EtherNet/IP (CIP)\n")
+		_, _ = fmt.Fprintf(stderr, "\nExit codes:\n")
+		_, _ = fmt.Fprintf(stderr, "  0  Protocol detected\n")
+		_, _ = fmt.Fprintf(stderr, "  1  Unknown protocol\n")
+		_, _ = fmt.Fprintf(stderr, "  2  Connection error\n")
+		_, _ = fmt.Fprintf(stderr, "  3  Invalid parameters\n")
 	}
 
-	flag.Parse()
+	if err := fs.Parse(args); err != nil {
+		return exitBadParams
+	}
+
+	// ---- version ----
+	build := core.BuildInfo{
+		Version:   Version,
+		Branch:    Branch,
+		Revision:  Revision,
+		BuildUser: BuildUser,
+		BuildDate: BuildDate,
+	}
 
 	if *showVersion {
-		fmt.Printf("ot-discover version %s\n", Version)
-		fmt.Printf("  branch:     %s\n", Branch)
-		fmt.Printf("  revision:   %s\n", Revision)
-		fmt.Printf("  build user: %s\n", BuildUser)
-		fmt.Printf("  build date: %s\n", BuildDate)
-		os.Exit(0)
+		_, _ = fmt.Fprintf(stdout, "ot-discover %s\n", build.String())
+		return exitDetected
 	}
 
-	// Validate parameters.
+	// ---- structured logger ----
+	logger := initLogger(stderr, *verbose)
+
+	logger.Info("starting ot-discover", "version", build.Short())
+
+	// ---- validate params ----
 	if *ip == "" {
-		fmt.Fprintln(os.Stderr, "Error: --ip is required")
-		flag.Usage()
-		os.Exit(exitBadParams)
+		logger.Error("--ip is required")
+		fs.Usage()
+		return exitBadParams
 	}
 	if *port <= 0 || *port > 65535 {
-		fmt.Fprintln(os.Stderr, "Error: --port must be between 1 and 65535")
-		flag.Usage()
-		os.Exit(exitBadParams)
+		logger.Error("--port must be between 1 and 65535", "port", *port)
+		fs.Usage()
+		return exitBadParams
 	}
 	if *check != "" {
 		lower := strings.ToLower(*check)
 		if _, ok := protocolAliases[lower]; !ok {
-			fmt.Fprintf(os.Stderr, "Error: unknown protocol %q. Supported: modbus, mms, s7, opcua, bacnet, can, profinet, dnp3, iec104, enip\n", *check)
-			os.Exit(exitBadParams)
+			logger.Error("unknown protocol", "check", *check,
+				"supported", "modbus, mms, s7, opcua, bacnet, can, profinet, dnp3, iec104, enip")
+			return exitBadParams
 		}
 	}
+	if *output != "text" && *output != "json" {
+		logger.Error("--output must be text or json", "output", *output)
+		return exitBadParams
+	}
 
-	// Build registry.
+	// ---- safe mode overrides ----
+	if *safe {
+		logger.Info("OT-safe mode enabled: sequential, low concurrency")
+		*parallel = false
+	}
+
+	// ---- build registry ----
+	registry := defaultRegistry()
+
+	// ---- build target ----
+	target := core.Target{
+		IP:      *ip,
+		Port:    *port,
+		Timeout: *timeout,
+	}
+
+	// ---- build engine config ----
+	config := core.EngineConfig{
+		Parallel:                *parallel,
+		EarlyStop:               true,
+		HighConfidenceThreshold: 0.9,
+	}
+	if *safe {
+		config = core.SafeEngineConfig()
+		config.EarlyStop = true
+	}
+	engine := core.NewEngine(registry, config)
+
+	// ---- context ----
+	ctx := context.Background()
+	if *globalTimeout > 0 {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, *globalTimeout)
+		defer cancel()
+	}
+
+	logger.Info("scanning target", "ip", *ip, "port", *port, "parallel", *parallel)
+
+	// ---- run detection ----
+	if *check != "" {
+		return runSpecificCheck(ctx, logger, engine, target, *check, *output, stdout)
+	}
+	return runFullDetection(ctx, logger, engine, target, *verbose, *output, stdout)
+}
+
+// defaultRegistry returns a registry pre-loaded with all known protocols.
+func defaultRegistry() *core.Registry {
 	registry := core.NewRegistry()
 	_ = registry.Register(mms.New())
 	_ = registry.Register(s7.New())
@@ -125,85 +205,120 @@ func main() {
 	_ = registry.Register(bacnet.New())
 	_ = registry.Register(can.New())
 	_ = registry.Register(profinet.New())
-
-	// Build target.
-	target := core.Target{
-		IP:      *ip,
-		Port:    *port,
-		Timeout: *timeout,
-	}
-
-	// Build engine.
-	config := core.EngineConfig{
-		Parallel:                *parallel,
-		EarlyStop:               true,
-		HighConfidenceThreshold: 0.9,
-	}
-	engine := core.NewEngine(registry, config)
-
-	ctx := context.Background()
-
-	if *check != "" {
-		runSpecificCheck(ctx, engine, target, *check, *verbose)
-	} else {
-		runFullDetection(ctx, engine, target, *verbose)
-	}
+	return registry
 }
 
-func runSpecificCheck(ctx context.Context, engine *core.Engine, target core.Target, protocol string, verbose bool) {
+func runSpecificCheck(ctx context.Context, logger *slog.Logger, engine *core.Engine, target core.Target, protocol, format string, w io.Writer) int {
 	lower := strings.ToLower(protocol)
-	protoName := protocolAliases[lower]
+	proto := protocolAliases[lower]
 
-	result, err := engine.DetectProtocol(ctx, target, protoName)
+	logger.Info("checking specific protocol", "protocol", proto)
+
+	result, err := engine.DetectProtocol(ctx, target, proto)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
-		os.Exit(exitConnError)
+		logger.Error("detection error", "protocol", proto, "error", err)
+		var pnf *core.ProtocolNotFoundError
+		if errors.As(err, &pnf) {
+			return exitBadParams
+		}
+		return exitConnError
+	}
+
+	if format == "json" {
+		return writeJSON(w, target, result)
 	}
 
 	if result.Matched {
-		fmt.Printf("%s: true\n", capitalizeFirst(lower))
-		if verbose {
-			fmt.Printf("Confidence: %.2f\n", result.Confidence)
-			fmt.Printf("Details: %s\n", result.Details)
-		}
-		os.Exit(exitDetected)
-	} else {
-		fmt.Printf("%s: false\n", capitalizeFirst(lower))
-		os.Exit(exitUnknown)
+		_, _ = fmt.Fprintf(w, "%s: true\n", capitalizeFirst(lower))
+		_, _ = fmt.Fprintf(w, "Confidence: %.2f\n", result.Confidence)
+		_, _ = fmt.Fprintf(w, "Details: %s\n", result.Details)
+		return exitDetected
 	}
+	_, _ = fmt.Fprintf(w, "%s: false\n", capitalizeFirst(lower))
+	return exitUnknown
 }
 
-func runFullDetection(ctx context.Context, engine *core.Engine, target core.Target, verbose bool) {
+func runFullDetection(ctx context.Context, logger *slog.Logger, engine *core.Engine, target core.Target, verbose bool, format string, w io.Writer) int {
 	result := engine.Detect(ctx, target)
 
-	fmt.Printf("Target: %s\n", target.Addr())
+	logger.Info("detection complete",
+		"protocol", result.Protocol,
+		"matched", result.Matched,
+		"confidence", result.Confidence)
 
-	if !result.Matched {
-		fmt.Println("Detected: Unknown")
-		os.Exit(exitUnknown)
+	if format == "json" {
+		return writeJSON(w, target, result)
 	}
 
-	fmt.Printf("Detected: %s\n", result.Protocol)
-	fmt.Printf("Confidence: %.2f\n", result.Confidence)
+	_, _ = fmt.Fprintf(w, "Target: %s\n", target.Addr())
+
+	if !result.Matched {
+		_, _ = fmt.Fprintln(w, "Detected: Unknown")
+		return exitUnknown
+	}
+
+	_, _ = fmt.Fprintf(w, "Detected: %s\n", result.Protocol)
+	_, _ = fmt.Fprintf(w, "Confidence: %.2f\n", result.Confidence)
 
 	if verbose {
-		fmt.Printf("Details: %s\n", result.Details)
+		_, _ = fmt.Fprintf(w, "Details: %s\n", result.Details)
 
-		// Show all results.
 		results := engine.DetectAll(ctx, target)
 		if len(results) > 1 {
-			fmt.Println("\nAll results:")
+			_, _ = fmt.Fprintln(w, "\nAll results:")
 			for _, r := range results {
 				status := "no match"
 				if r.Matched {
 					status = fmt.Sprintf("matched (%.2f)", r.Confidence)
 				}
-				fmt.Printf("  %-20s %s\n", r.Protocol, status)
+				_, _ = fmt.Fprintf(w, "  %-20s %s\n", r.Protocol, status)
 			}
 		}
 	}
 
-	os.Exit(exitDetected)
+	return exitDetected
+}
+
+// jsonOutput is the machine-readable result envelope.
+type jsonOutput struct {
+	Target     string  `json:"target"`
+	Protocol   string  `json:"protocol"`
+	Matched    bool    `json:"matched"`
+	Confidence float64 `json:"confidence"`
+	Details    string  `json:"details,omitempty"`
+	Error      string  `json:"error,omitempty"`
+}
+
+func writeJSON(w io.Writer, target core.Target, r core.Result) int {
+	out := jsonOutput{
+		Target:     target.Addr(),
+		Protocol:   r.Protocol.String(),
+		Matched:    r.Matched,
+		Confidence: r.Confidence,
+		Details:    r.Details,
+	}
+	if r.Error != nil {
+		out.Error = r.Error.Error()
+	}
+
+	enc := json.NewEncoder(w)
+	enc.SetIndent("", "  ")
+	_ = enc.Encode(out) //nolint:errcheck
+
+	if r.Matched {
+		return exitDetected
+	}
+	return exitUnknown
+}
+
+func initLogger(w io.Writer, verbose bool) *slog.Logger {
+	level := slog.LevelInfo
+	if verbose {
+		level = slog.LevelDebug
+	}
+	return slog.New(slog.NewTextHandler(w, &slog.HandlerOptions{
+		Level: level,
+	}))
 }
 
 func capitalizeFirst(s string) string {

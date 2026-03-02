@@ -16,7 +16,7 @@ import (
 )
 
 const (
-	protocolName = "EtherNet/IP"
+	protocolName = core.ProtocolENIP
 
 	// Encapsulation header constants.
 	cmdRegisterSession   uint16 = 0x0065
@@ -40,10 +40,13 @@ func New() *Fingerprinter {
 	return &Fingerprinter{}
 }
 
-// Name returns the protocol name.
-func (f *Fingerprinter) Name() string {
+// Name returns the protocol identifier.
+func (f *Fingerprinter) Name() core.Protocol {
 	return protocolName
 }
+
+// Priority returns the detection order (lower = tested first).
+func (f *Fingerprinter) Priority() int { return 30 }
 
 // Detect attempts to identify EtherNet/IP on the target by sending a
 // RegisterSession command and validating the response.

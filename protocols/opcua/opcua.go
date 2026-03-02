@@ -15,7 +15,7 @@ import (
 )
 
 const (
-	protocolName = "OPC UA"
+	protocolName = core.ProtocolOPCUA
 
 	// UA TCP message types (3-byte ASCII).
 	msgTypeHEL = "HEL"
@@ -48,10 +48,13 @@ func New() *Fingerprinter {
 	return &Fingerprinter{}
 }
 
-// Name returns the protocol name.
-func (f *Fingerprinter) Name() string {
+// Name returns the protocol identifier.
+func (f *Fingerprinter) Name() core.Protocol {
 	return protocolName
 }
+
+// Priority returns the detection order (lower = tested first).
+func (f *Fingerprinter) Priority() int { return 70 }
 
 // Detect attempts to identify OPC UA on the target by sending a HEL
 // message and validating the ACK response.

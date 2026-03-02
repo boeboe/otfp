@@ -2,6 +2,7 @@ package core
 
 import (
 	"fmt"
+	"sort"
 	"sync"
 )
 
@@ -10,13 +11,13 @@ import (
 type Registry struct {
 	mu           sync.RWMutex
 	fingerprints []Fingerprinter
-	byName       map[string]Fingerprinter
+	byName       map[Protocol]Fingerprinter
 }
 
 // NewRegistry creates an empty Registry.
 func NewRegistry() *Registry {
 	return &Registry{
-		byName: make(map[string]Fingerprinter),
+		byName: make(map[Protocol]Fingerprinter),
 	}
 }
 
@@ -36,29 +37,33 @@ func (r *Registry) Register(fp Fingerprinter) error {
 	return nil
 }
 
-// Get returns the fingerprinter with the given name, or nil if not found.
-func (r *Registry) Get(name string) Fingerprinter {
+// Get returns the fingerprinter for the given protocol, or nil if not found.
+func (r *Registry) Get(protocol Protocol) Fingerprinter {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
-	return r.byName[name]
+	return r.byName[protocol]
 }
 
-// All returns all registered fingerprinters in registration order.
+// All returns all registered fingerprinters sorted by priority (lowest first).
 func (r *Registry) All() []Fingerprinter {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 
 	result := make([]Fingerprinter, len(r.fingerprints))
 	copy(result, r.fingerprints)
+
+	sort.Slice(result, func(i, j int) bool {
+		return result[i].Priority() < result[j].Priority()
+	})
 	return result
 }
 
-// Names returns the names of all registered fingerprinters.
-func (r *Registry) Names() []string {
+// Names returns the protocol identifiers of all registered fingerprinters.
+func (r *Registry) Names() []Protocol {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 
-	names := make([]string, len(r.fingerprints))
+	names := make([]Protocol, len(r.fingerprints))
 	for i, fp := range r.fingerprints {
 		names[i] = fp.Name()
 	}

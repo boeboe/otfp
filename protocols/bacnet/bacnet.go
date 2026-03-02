@@ -15,7 +15,7 @@ import (
 )
 
 const (
-	protocolName = "BACnet/IP"
+	protocolName = core.ProtocolBACnet
 
 	// BVLC (BACnet Virtual Link Control) constants.
 	bvlcType           byte   = 0x81 // BACnet/IP (Annex J)
@@ -39,10 +39,13 @@ func New() *Fingerprinter {
 	return &Fingerprinter{}
 }
 
-// Name returns the protocol name.
-func (f *Fingerprinter) Name() string {
+// Name returns the protocol identifier.
+func (f *Fingerprinter) Name() core.Protocol {
 	return protocolName
 }
+
+// Priority returns the detection order (lower = tested first).
+func (f *Fingerprinter) Priority() int { return 80 }
 
 // Detect attempts to identify BACnet/IP on the target by sending a minimal
 // BVLL frame and validating the response.

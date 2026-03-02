@@ -19,6 +19,10 @@ type EngineConfig struct {
 	// HighConfidenceThreshold is the minimum confidence to trigger early stop.
 	// Default: 0.9
 	HighConfidenceThreshold float64
+
+	// MaxConcurrency limits the number of in-flight goroutines when Parallel
+	// is true. Zero or negative means unbounded.
+	MaxConcurrency int
 }
 
 // DefaultEngineConfig returns sensible default engine configuration.
@@ -27,6 +31,18 @@ func DefaultEngineConfig() EngineConfig {
 		Parallel:                true,
 		EarlyStop:               true,
 		HighConfidenceThreshold: 0.9,
+		MaxConcurrency:          0,
+	}
+}
+
+// SafeEngineConfig returns a conservative configuration suitable for
+// production OT environments where minimising network impact is critical.
+func SafeEngineConfig() EngineConfig {
+	return EngineConfig{
+		Parallel:                false,
+		EarlyStop:               true,
+		HighConfidenceThreshold: 0.9,
+		MaxConcurrency:          1,
 	}
 }
 
@@ -62,7 +78,7 @@ func (e *Engine) DetectAll(ctx context.Context, target Target) []Result {
 }
 
 // Detect runs all fingerprinters and returns the best match.
-// If no protocol is detected, it returns a Result with Protocol="Unknown".
+// If no protocol is detected, it returns a Result with Protocol=ProtocolUnknown.
 func (e *Engine) Detect(ctx context.Context, target Target) Result {
 	results := e.DetectAll(ctx, target)
 
@@ -76,7 +92,7 @@ func (e *Engine) Detect(ctx context.Context, target Target) Result {
 
 	if len(matched) == 0 {
 		return Result{
-			Protocol:   "Unknown",
+			Protocol:   ProtocolUnknown,
 			Matched:    false,
 			Confidence: 0.0,
 			Details:    "No OT protocol detected",
@@ -88,7 +104,7 @@ func (e *Engine) Detect(ctx context.Context, target Target) Result {
 }
 
 // DetectProtocol runs a specific named fingerprinter against the target.
-func (e *Engine) DetectProtocol(ctx context.Context, target Target, protocol string) (Result, error) {
+func (e *Engine) DetectProtocol(ctx context.Context, target Target, protocol Protocol) (Result, error) {
 	fp := e.registry.Get(protocol)
 	if fp == nil {
 		return Result{}, &ProtocolNotFoundError{Protocol: protocol}
@@ -98,11 +114,11 @@ func (e *Engine) DetectProtocol(ctx context.Context, target Target, protocol str
 
 // ProtocolNotFoundError is returned when a requested protocol is not registered.
 type ProtocolNotFoundError struct {
-	Protocol string
+	Protocol Protocol
 }
 
 func (e *ProtocolNotFoundError) Error() string {
-	return "protocol not registered: " + e.Protocol
+	return "protocol not registered: " + string(e.Protocol)
 }
 
 func (e *Engine) detectSequential(ctx context.Context, target Target, fps []Fingerprinter) []Result {
@@ -117,7 +133,7 @@ func (e *Engine) detectSequential(ctx context.Context, target Target, fps []Fing
 
 		result, err := fp.Detect(ctx, target)
 		if err != nil {
-			results = append(results, NoMatch(fp.Name()))
+			results = append(results, ErrorResult(fp.Name(), err))
 			continue
 		}
 
@@ -144,14 +160,31 @@ func (e *Engine) detectParallel(ctx context.Context, target Target, fps []Finger
 	ch := make(chan indexedResult, len(fps))
 	var wg sync.WaitGroup
 
+	// Semaphore for concurrency limiting. Nil channel = unbounded.
+	var sem chan struct{}
+	if e.config.MaxConcurrency > 0 {
+		sem = make(chan struct{}, e.config.MaxConcurrency)
+	}
+
 	for i, fp := range fps {
 		wg.Add(1)
 		go func(idx int, fp Fingerprinter) {
 			defer wg.Done()
 
+			// Acquire semaphore slot if bounded.
+			if sem != nil {
+				select {
+				case sem <- struct{}{}:
+					defer func() { <-sem }()
+				case <-ctx.Done():
+					ch <- indexedResult{result: ErrorResult(fp.Name(), ctx.Err()), index: idx}
+					return
+				}
+			}
+
 			result, err := fp.Detect(ctx, target)
 			if err != nil {
-				ch <- indexedResult{result: NoMatch(fp.Name()), index: idx}
+				ch <- indexedResult{result: ErrorResult(fp.Name(), err), index: idx}
 				return
 			}
 			ch <- indexedResult{result: result, index: idx}

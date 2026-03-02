@@ -16,7 +16,7 @@ import (
 )
 
 const (
-	protocolName = "CAN (TCP Gateway)"
+	protocolName = core.ProtocolCAN
 
 	maxResponseSize = 512
 )
@@ -37,10 +37,13 @@ func New() *Fingerprinter {
 	return &Fingerprinter{}
 }
 
-// Name returns the protocol name.
-func (f *Fingerprinter) Name() string {
+// Name returns the protocol identifier.
+func (f *Fingerprinter) Name() core.Protocol {
 	return protocolName
 }
+
+// Priority returns the detection order (lower = tested first).
+func (f *Fingerprinter) Priority() int { return 90 }
 
 // Detect attempts to identify a CAN-over-TCP gateway on the target.
 // It sends SLCAN probe commands and validates ASCII responses.

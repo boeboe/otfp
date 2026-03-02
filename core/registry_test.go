@@ -7,12 +7,15 @@ import (
 
 // mockFingerprinter is a test double for Fingerprinter.
 type mockFingerprinter struct {
-	name   string
-	result Result
-	err    error
+	name     Protocol
+	priority int
+	result   Result
+	err      error
 }
 
-func (m *mockFingerprinter) Name() string { return m.name }
+func (m *mockFingerprinter) Name() Protocol { return m.name }
+
+func (m *mockFingerprinter) Priority() int { return m.priority }
 
 func (m *mockFingerprinter) Detect(ctx context.Context, target Target) (Result, error) {
 	return m.result, m.err
@@ -47,16 +50,17 @@ func TestRegistryGet(t *testing.T) {
 
 func TestRegistryAll(t *testing.T) {
 	reg := NewRegistry()
-	_ = reg.Register(&mockFingerprinter{name: "A"})
-	_ = reg.Register(&mockFingerprinter{name: "B"})
-	_ = reg.Register(&mockFingerprinter{name: "C"})
+	_ = reg.Register(&mockFingerprinter{name: "A", priority: 10})
+	_ = reg.Register(&mockFingerprinter{name: "B", priority: 20})
+	_ = reg.Register(&mockFingerprinter{name: "C", priority: 30})
 
 	all := reg.All()
 	if len(all) != 3 {
 		t.Errorf("All() returned %d items, want 3", len(all))
 	}
+	// All() now returns sorted by priority (ascending).
 	if all[0].Name() != "A" || all[1].Name() != "B" || all[2].Name() != "C" {
-		t.Error("All() items not in registration order")
+		t.Error("All() items not sorted by priority")
 	}
 }
 

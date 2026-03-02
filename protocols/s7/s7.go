@@ -19,7 +19,7 @@ import (
 )
 
 const (
-	protocolName    = "Siemens S7comm"
+	protocolName    = core.ProtocolS7
 	maxResponseSize = 512
 
 	// S7comm constants.
@@ -44,10 +44,13 @@ func New() *Fingerprinter {
 	return &Fingerprinter{}
 }
 
-// Name returns the protocol name.
-func (f *Fingerprinter) Name() string {
+// Name returns the protocol identifier.
+func (f *Fingerprinter) Name() core.Protocol {
 	return protocolName
 }
+
+// Priority returns the detection order (lower = tested first).
+func (f *Fingerprinter) Priority() int { return 20 }
 
 // Detect attempts to identify S7comm on the target.
 // Phase 1: COTP CR -> CC (ISO-on-TCP)

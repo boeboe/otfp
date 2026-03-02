@@ -17,7 +17,7 @@ import (
 )
 
 const (
-	protocolName = "PROFINET (Ethernet)"
+	protocolName = core.ProtocolPROFINET
 
 	// DCE/RPC constants.
 	rpcVersion      byte = 5
@@ -62,10 +62,13 @@ func New() *Fingerprinter {
 	return &Fingerprinter{}
 }
 
-// Name returns the protocol name.
-func (f *Fingerprinter) Name() string {
+// Name returns the protocol identifier.
+func (f *Fingerprinter) Name() core.Protocol {
 	return protocolName
 }
+
+// Priority returns the detection order (lower = tested first).
+func (f *Fingerprinter) Priority() int { return 100 }
 
 // Detect attempts to identify PROFINET on the target by sending a DCE/RPC
 // Bind request and validating the Bind-Ack response.

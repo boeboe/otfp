@@ -15,7 +15,7 @@ import (
 )
 
 const (
-	protocolName = "IEC 60870-5-104"
+	protocolName = core.ProtocolIEC104
 
 	// APCI constants.
 	startByte byte = 0x68 // IEC 104 start byte
@@ -45,10 +45,13 @@ func New() *Fingerprinter {
 	return &Fingerprinter{}
 }
 
-// Name returns the protocol name.
-func (f *Fingerprinter) Name() string {
+// Name returns the protocol identifier.
+func (f *Fingerprinter) Name() core.Protocol {
 	return protocolName
 }
+
+// Priority returns the detection order (lower = tested first).
+func (f *Fingerprinter) Priority() int { return 40 }
 
 // Detect attempts to identify IEC 104 on the target by sending a STARTDT_ACT
 // frame and validating the response.

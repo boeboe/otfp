@@ -15,7 +15,7 @@ import (
 )
 
 const (
-	protocolName    = "IEC 61850 MMS"
+	protocolName    = core.ProtocolMMS
 	maxResponseSize = 512
 )
 
@@ -27,10 +27,13 @@ func New() *Fingerprinter {
 	return &Fingerprinter{}
 }
 
-// Name returns the protocol name.
-func (f *Fingerprinter) Name() string {
+// Name returns the protocol identifier.
+func (f *Fingerprinter) Name() core.Protocol {
 	return protocolName
 }
+
+// Priority returns the detection order (lower = tested first).
+func (f *Fingerprinter) Priority() int { return 10 }
 
 // Detect attempts to identify IEC 61850 MMS on the target.
 // It sends a TPKT/COTP Connection Request and validates the response.

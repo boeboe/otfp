@@ -1,6 +1,7 @@
 package core
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 )
@@ -34,6 +35,20 @@ func TestMatch(t *testing.T) {
 	}
 }
 
+func TestErrorResult(t *testing.T) {
+	err := fmt.Errorf("connection refused")
+	r := ErrorResult(ProtocolModbus, err)
+	if r.Matched {
+		t.Error("ErrorResult should have Matched=false")
+	}
+	if r.Protocol != ProtocolModbus {
+		t.Errorf("Protocol = %q, want %q", r.Protocol, ProtocolModbus)
+	}
+	if r.Error == nil {
+		t.Error("ErrorResult should preserve error")
+	}
+}
+
 func TestResultString(t *testing.T) {
 	t.Run("matched", func(t *testing.T) {
 		r := Match("Modbus", 0.90, "good match")
@@ -51,6 +66,14 @@ func TestResultString(t *testing.T) {
 		s := r.String()
 		if !strings.Contains(s, "false") {
 			t.Errorf("String() missing 'false': %s", s)
+		}
+	})
+
+	t.Run("error", func(t *testing.T) {
+		r := ErrorResult("Modbus", fmt.Errorf("timeout"))
+		s := r.String()
+		if !strings.Contains(s, "Error") {
+			t.Errorf("String() missing 'Error': %s", s)
 		}
 	})
 }

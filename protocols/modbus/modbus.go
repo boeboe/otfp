@@ -15,7 +15,7 @@ import (
 )
 
 const (
-	protocolName = "Modbus TCP"
+	protocolName = core.ProtocolModbus
 
 	// MBAP header constants.
 	mbapHeaderSize = 7 // Transaction ID (2) + Protocol ID (2) + Length (2) + Unit ID (1)
@@ -44,10 +44,13 @@ func New() *Fingerprinter {
 	return &Fingerprinter{}
 }
 
-// Name returns the protocol name.
-func (f *Fingerprinter) Name() string {
+// Name returns the protocol identifier.
+func (f *Fingerprinter) Name() core.Protocol {
 	return protocolName
 }
+
+// Priority returns the detection order (lower = tested first).
+func (f *Fingerprinter) Priority() int { return 60 }
 
 // Detect attempts to identify Modbus TCP on the target.
 func (f *Fingerprinter) Detect(ctx context.Context, target core.Target) (core.Result, error) {

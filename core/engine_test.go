@@ -10,12 +10,14 @@ import (
 func TestEngineDetectBestMatch(t *testing.T) {
 	reg := NewRegistry()
 	_ = reg.Register(&mockFingerprinter{
-		name:   "Low",
-		result: Match("Low", 0.3, "low match"),
+		name:     "Low",
+		priority: 10,
+		result:   Match("Low", 0.3, "low match"),
 	})
 	_ = reg.Register(&mockFingerprinter{
-		name:   "High",
-		result: Match("High", 0.95, "high match"),
+		name:     "High",
+		priority: 20,
+		result:   Match("High", 0.95, "high match"),
 	})
 
 	engine := NewEngine(reg, DefaultEngineConfig())
@@ -39,8 +41,8 @@ func TestEngineDetectUnknown(t *testing.T) {
 	engine := NewEngine(reg, DefaultEngineConfig())
 	result := engine.Detect(context.Background(), Target{IP: "127.0.0.1", Port: 1234})
 
-	if result.Protocol != "Unknown" {
-		t.Errorf("Detect() returned %q, want Unknown", result.Protocol)
+	if result.Protocol != ProtocolUnknown {
+		t.Errorf("Detect() returned %q, want %q", result.Protocol, ProtocolUnknown)
 	}
 	if result.Matched {
 		t.Error("Expected Matched=false")
@@ -77,12 +79,14 @@ func TestEngineDetectProtocol(t *testing.T) {
 func TestEngineSequential(t *testing.T) {
 	reg := NewRegistry()
 	_ = reg.Register(&mockFingerprinter{
-		name:   "A",
-		result: Match("A", 0.5, "partial"),
+		name:     "A",
+		priority: 10,
+		result:   Match("A", 0.5, "partial"),
 	})
 	_ = reg.Register(&mockFingerprinter{
-		name:   "B",
-		result: Match("B", 0.8, "good"),
+		name:     "B",
+		priority: 20,
+		result:   Match("B", 0.8, "good"),
 	})
 
 	config := EngineConfig{
@@ -103,18 +107,16 @@ func TestEngineSequential(t *testing.T) {
 }
 
 func TestEngineEarlyStop(t *testing.T) {
-	callCount := 0
 	reg := NewRegistry()
 	_ = reg.Register(&mockFingerprinter{
-		name:   "High",
-		result: Match("High", 0.95, "early"),
+		name:     "High",
+		priority: 10,
+		result:   Match("High", 0.95, "early"),
 	})
 	_ = reg.Register(&mockFingerprinter{
-		name: "Never",
-		result: func() Result {
-			callCount++
-			return NoMatch("Never")
-		}(),
+		name:     "Never",
+		priority: 20,
+		result:   NoMatch("Never"),
 	})
 
 	config := EngineConfig{
@@ -141,8 +143,8 @@ func TestEngineWithErrors(t *testing.T) {
 	engine := NewEngine(reg, DefaultEngineConfig())
 	result := engine.Detect(context.Background(), Target{IP: "127.0.0.1", Port: 1234})
 
-	if result.Protocol != "Unknown" {
-		t.Errorf("Expected Unknown, got %q", result.Protocol)
+	if result.Protocol != ProtocolUnknown {
+		t.Errorf("Expected %q, got %q", ProtocolUnknown, result.Protocol)
 	}
 }
 
@@ -170,7 +172,44 @@ func TestEngineEmptyRegistry(t *testing.T) {
 	engine := NewEngine(reg, DefaultEngineConfig())
 	result := engine.Detect(context.Background(), Target{IP: "127.0.0.1", Port: 1234})
 
-	if result.Protocol != "Unknown" {
-		t.Errorf("Expected Unknown, got %q", result.Protocol)
+	if result.Protocol != ProtocolUnknown {
+		t.Errorf("Expected %q, got %q", ProtocolUnknown, result.Protocol)
+	}
+}
+
+func TestEngineSafeConfig(t *testing.T) {
+	cfg := SafeEngineConfig()
+	if cfg.Parallel {
+		t.Error("SafeEngineConfig should disable parallel")
+	}
+	if cfg.MaxConcurrency != 1 {
+		t.Errorf("SafeEngineConfig MaxConcurrency = %d, want 1", cfg.MaxConcurrency)
+	}
+}
+
+func TestEngineMaxConcurrency(t *testing.T) {
+	reg := NewRegistry()
+	_ = reg.Register(&mockFingerprinter{
+		name:     "P1",
+		priority: 10,
+		result:   NoMatch("P1"),
+	})
+	_ = reg.Register(&mockFingerprinter{
+		name:     "P2",
+		priority: 20,
+		result:   Match("P2", 0.8, "ok"),
+	})
+
+	config := EngineConfig{
+		Parallel:                true,
+		EarlyStop:               false,
+		HighConfidenceThreshold: 0.9,
+		MaxConcurrency:          1,
+	}
+	engine := NewEngine(reg, config)
+	results := engine.DetectAll(context.Background(), Target{IP: "127.0.0.1", Port: 5555})
+
+	if len(results) != 2 {
+		t.Fatalf("Expected 2 results with bounded concurrency, got %d", len(results))
 	}
 }
