@@ -11,6 +11,9 @@ import (
 	"github.com/boeboe/otfp/core"
 	"github.com/boeboe/otfp/protocols/bacnet"
 	"github.com/boeboe/otfp/protocols/can"
+	"github.com/boeboe/otfp/protocols/dnp3"
+	"github.com/boeboe/otfp/protocols/enip"
+	"github.com/boeboe/otfp/protocols/iec104"
 	"github.com/boeboe/otfp/protocols/mms"
 	"github.com/boeboe/otfp/protocols/modbus"
 	"github.com/boeboe/otfp/protocols/opcua"
@@ -43,12 +46,15 @@ var protocolAliases = map[string]string{
 	"bacnet":   "BACnet/IP",
 	"can":      "CAN (TCP Gateway)",
 	"profinet": "PROFINET (Ethernet)",
+	"dnp3":     "DNP3 (TCP)",
+	"iec104":   "IEC 60870-5-104",
+	"enip":     "EtherNet/IP",
 }
 
 func main() {
 	ip := flag.String("ip", "", "Target IP address (required)")
 	port := flag.Int("port", 0, "Target TCP port (required)")
-	check := flag.String("check", "", "Check specific protocol: modbus, mms, s7, opcua, bacnet, can, profinet")
+	check := flag.String("check", "", "Check specific protocol: modbus, mms, s7, opcua, bacnet, can, profinet, dnp3, iec104, enip")
 	timeout := flag.Duration("timeout", 5*time.Second, "Connection timeout")
 	verbose := flag.Bool("verbose", false, "Show detailed detection info")
 	parallel := flag.Bool("parallel", true, "Run protocol checks in parallel")
@@ -67,6 +73,9 @@ func main() {
 		fmt.Fprintf(os.Stderr, "  bacnet    BACnet/IP (BVLL)\n")
 		fmt.Fprintf(os.Stderr, "  can       CAN TCP Gateway (SLCAN)\n")
 		fmt.Fprintf(os.Stderr, "  profinet  PROFINET (DCE/RPC)\n")
+		fmt.Fprintf(os.Stderr, "  dnp3      DNP3 over TCP\n")
+		fmt.Fprintf(os.Stderr, "  iec104    IEC 60870-5-104\n")
+		fmt.Fprintf(os.Stderr, "  enip      EtherNet/IP (CIP)\n")
 		fmt.Fprintf(os.Stderr, "\nExit codes:\n")
 		fmt.Fprintf(os.Stderr, "  0  Protocol detected\n")
 		fmt.Fprintf(os.Stderr, "  1  Unknown protocol\n")
@@ -99,16 +108,19 @@ func main() {
 	if *check != "" {
 		lower := strings.ToLower(*check)
 		if _, ok := protocolAliases[lower]; !ok {
-			fmt.Fprintf(os.Stderr, "Error: unknown protocol %q. Supported: modbus, mms, s7, opcua, bacnet, can, profinet\n", *check)
+			fmt.Fprintf(os.Stderr, "Error: unknown protocol %q. Supported: modbus, mms, s7, opcua, bacnet, can, profinet, dnp3, iec104, enip\n", *check)
 			os.Exit(exitBadParams)
 		}
 	}
 
 	// Build registry.
 	registry := core.NewRegistry()
-	_ = registry.Register(modbus.New())
 	_ = registry.Register(mms.New())
 	_ = registry.Register(s7.New())
+	_ = registry.Register(enip.New())
+	_ = registry.Register(iec104.New())
+	_ = registry.Register(dnp3.New())
+	_ = registry.Register(modbus.New())
 	_ = registry.Register(opcua.New())
 	_ = registry.Register(bacnet.New())
 	_ = registry.Register(can.New())

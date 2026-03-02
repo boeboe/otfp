@@ -15,14 +15,21 @@ A pure Golang library for OT (Operational Technology) protocol fingerprinting at
 | **BACnet/IP** | BVLL Who-Is broadcast probe | Single exchange |
 | **CAN (TCP Gateway)** | SLCAN ASCII command probe | Single exchange |
 | **PROFINET** | DCE/RPC Bind with PNIO CM UUID | Single exchange |
+| **DNP3** | Link-layer start bytes + CRC validation | Single exchange |
+| **IEC 60870-5-104** | APCI STARTDT_ACT/CON handshake | Single exchange |
+| **EtherNet/IP** | Encapsulation RegisterSession handshake | Single exchange |
 
 ### TCP Detectability Notes
 
 All protocols above are detectable over raw TCP connections. Some notes on real-world deployments:
 
 - **PROFIBUS** uses RS-485 serial and is not directly detectable over TCP. PROFINET is its TCP/IP successor.
-- **EtherNet/IP** and **DNP3** are planned for future releases.
 - **CAN** detection targets TCP-to-CAN gateways that expose an SLCAN ASCII interface over a TCP socket.
+
+### Energy & Utility Protocol Coverage
+
+- **DNP3** and **IEC 60870-5-104** are the dominant SCADA protocols in power grid infrastructure. DNP3 is prevalent in North America; IEC 104 dominates European substations.
+- **EtherNet/IP** (CIP over TCP) is the primary protocol in Rockwell/Allen-Bradley factory automation environments.
 
 ## Key Principles
 
@@ -76,7 +83,7 @@ Modbus: true
 |---|---|---|
 | `--ip` | Target IP address (required) | — |
 | `--port` | Target TCP port (required) | — |
-| `--check` | Check specific protocol: `modbus`, `mms`, `s7`, `opcua`, `bacnet`, `can`, `profinet` | (all) |
+| `--check` | Check specific protocol: `modbus`, `mms`, `s7`, `opcua`, `bacnet`, `can`, `profinet`, `dnp3`, `iec104`, `enip` | (all) |
 | `--timeout` | Connection timeout | `5s` |
 | `--verbose` | Show detailed detection info | `false` |
 | `--parallel` | Run checks in parallel | `true` |
@@ -105,6 +112,9 @@ import (
     "github.com/boeboe/otfp/core"
     "github.com/boeboe/otfp/protocols/bacnet"
     "github.com/boeboe/otfp/protocols/can"
+    "github.com/boeboe/otfp/protocols/dnp3"
+    "github.com/boeboe/otfp/protocols/enip"
+    "github.com/boeboe/otfp/protocols/iec104"
     "github.com/boeboe/otfp/protocols/modbus"
     "github.com/boeboe/otfp/protocols/mms"
     "github.com/boeboe/otfp/protocols/opcua"
@@ -115,9 +125,12 @@ import (
 func main() {
     // Create registry and register protocol fingerprinters.
     registry := core.NewRegistry()
-    registry.Register(modbus.New())
     registry.Register(mms.New())
     registry.Register(s7.New())
+    registry.Register(enip.New())
+    registry.Register(iec104.New())
+    registry.Register(dnp3.New())
+    registry.Register(modbus.New())
     registry.Register(opcua.New())
     registry.Register(bacnet.New())
     registry.Register(can.New())
@@ -195,6 +208,13 @@ otfp/
 │   │   └── can.go             # SLCAN ASCII command detection
 │   └── profinet/              # PROFINET fingerprinter
 │       └── profinet.go        # DCE/RPC Bind with PNIO CM UUID
+├── protocols/
+│   ├── dnp3/                  # DNP3 fingerprinter
+│   │   └── dnp3.go            # Link-layer start bytes + CRC
+│   ├── iec104/                # IEC 60870-5-104 fingerprinter
+│   │   └── iec104.go          # APCI STARTDT/CON exchange
+│   └── enip/                  # EtherNet/IP fingerprinter
+│       └── enip.go            # RegisterSession handshake
 ├── transport/                 # TCP transport layer
 │   └── tcp.go                 # Connection with timeout/deadline support
 ├── cmd/
@@ -309,6 +329,48 @@ Sends a **DCE/RPC Bind** request with the PNIO Connection Manager UUID:
 - Fragment length valid (+0.10)
 - PNIO transfer syntax accepted (+0.50)
 
+### DNP3 (TCP)
+
+Sends a minimal **DNP3 Link Status Request** frame with valid CRC:
+
+1. Constructs link-layer frame with start bytes `0x05 0x64`
+2. Uses Function Code 0x09 (Link Status Request) with computed CRC-16
+3. Validates response start bytes, length, CRC, and control field
+
+**Confidence factors:**
+- Start bytes 0x05 0x64 (+0.40)
+- Valid length field (+0.20)
+- Valid CRC-16 (+0.20)
+- Valid response control code (+0.20)
+
+### IEC 60870-5-104
+
+Sends a **STARTDT_ACT** U-format APCI frame and validates the confirmation:
+
+1. Sends 6-byte APCI frame: `68 04 07 00 00 00`
+2. Validates start byte `0x68` and APCI length
+3. Checks for STARTDT_CON (`0x0B`) or other valid U/S-format response
+
+**Confidence factors:**
+- Start byte 0x68 (+0.30)
+- Length field valid (+0.20)
+- Valid U/S-format control field (+0.30)
+- STARTDT_CON received (+0.20)
+
+### EtherNet/IP (CIP over TCP)
+
+Sends a **RegisterSession** encapsulation command and validates the response:
+
+1. Constructs 28-byte RegisterSession request (command 0x0065, protocol version 1)
+2. Validates response command code, status, and session handle
+3. Non-zero session handle confirms active EtherNet/IP endpoint
+
+**Confidence factors:**
+- Command echo 0x0065 (+0.30)
+- Status = Success (+0.20)
+- Session ID non-zero (+0.30)
+- Length field valid (+0.20)
+
 ## Security Considerations
 
 This library is designed for safe use in ICS/SCADA environments:
@@ -339,6 +401,9 @@ go test ./protocols/opcua/ -v
 go test ./protocols/bacnet/ -v
 go test ./protocols/can/ -v
 go test ./protocols/profinet/ -v
+go test ./protocols/dnp3/ -v
+go test ./protocols/iec104/ -v
+go test ./protocols/enip/ -v
 
 # Run fuzz tests (Go 1.18+)
 go test ./protocols/modbus/ -fuzz=FuzzValidateResponse -fuzztime=30s
@@ -346,6 +411,9 @@ go test ./protocols/opcua/ -fuzz=FuzzValidateResponse -fuzztime=30s
 go test ./protocols/bacnet/ -fuzz=FuzzValidateResponse -fuzztime=30s
 go test ./protocols/can/ -fuzz=FuzzValidateResponse -fuzztime=30s
 go test ./protocols/profinet/ -fuzz=FuzzValidateResponse -fuzztime=30s
+go test ./protocols/dnp3/ -fuzz=FuzzValidateResponse -fuzztime=30s
+go test ./protocols/iec104/ -fuzz=FuzzValidateResponse -fuzztime=30s
+go test ./protocols/enip/ -fuzz=FuzzValidateResponse -fuzztime=30s
 ```
 
 ## License
