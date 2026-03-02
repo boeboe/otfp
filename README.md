@@ -1,7 +1,6 @@
 # otfp — OT Protocol Fingerprinting Library
 
 [![Go](https://img.shields.io/badge/Go-1.25+-00ADD8?style=flat&logo=go)](https://go.dev/)
-[![Zero Dependencies](https://img.shields.io/badge/dependencies-0-brightgreen)](https://pkg.go.dev/github.com/boeboe/otfp)
 
 A pure Go library for OT (Operational Technology) protocol fingerprinting at
 the **connection level only**. Detects industrial protocols based on transport
@@ -66,11 +65,14 @@ real-world deployments:
   scanning
 - **Audit trail** — every `Result` carries a unique `DetectionID` and
   `Timestamp`
-- **Zero external dependencies** — pure Go standard library
+- **Signal safety** — graceful shutdown on SIGINT/SIGTERM via context
+  cancellation
 
 ---
 
 ## Installation
+
+### Library
 
 ```bash
 go get github.com/boeboe/otfp
@@ -86,10 +88,26 @@ go install github.com/boeboe/otfp/cmd/otprobe@latest
 
 ## CLI Usage (`otprobe`)
 
-### Full Detection (all protocols)
+`otprobe` uses a **subcommand architecture** powered by [cobra](https://github.com/spf13/cobra):
+
+```
+otprobe <command> [flags]
+```
+
+### Commands
+
+| Command   | Description |
+|-----------|-------------|
+| `detect`  | Detect OT protocols on a target endpoint |
+| `list`    | List supported protocols with priorities |
+| `version` | Print version information (Go version, platform, build metadata) |
+
+### `otprobe detect`
+
+Full detection (all protocols):
 
 ```bash
-otprobe --ip 192.168.1.10 --port 102
+otprobe detect --ip 192.168.1.10 --port 102
 ```
 
 Output:
@@ -97,27 +115,19 @@ Output:
 ```
 Target: 192.168.1.10:102
 Detected: Siemens S7comm
-Confidence: 0.95
+Confidence: 0.95 (high)
 ```
 
-### Protocol-Specific Check
+Protocol-specific check:
 
 ```bash
-otprobe --ip 192.168.1.10 --port 502 --check modbus
+otprobe detect --ip 192.168.1.10 --port 502 --check modbus
 ```
 
-Output:
-
-```
-Modbus: true
-Confidence: 0.95
-Details: MBAP header valid, TxID echoed
-```
-
-### JSON Output
+JSON output with structured error and confidence level:
 
 ```bash
-otprobe --ip 192.168.1.10 --port 502 --output json
+otprobe detect --ip 192.168.1.10 --port 502 --output json
 ```
 
 ```json
@@ -126,6 +136,7 @@ otprobe --ip 192.168.1.10 --port 502 --output json
   "protocol": "Modbus TCP",
   "matched": true,
   "confidence": 0.95,
+  "confidence_level": "high",
   "details": "MBAP header valid, TxID echoed",
   "fingerprint": {
     "id": "modbus.fc43",
@@ -136,13 +147,11 @@ otprobe --ip 192.168.1.10 --port 502 --output json
 }
 ```
 
-### List Supported Protocols
+### `otprobe list`
 
 ```bash
-otprobe --list
+otprobe list
 ```
-
-Output:
 
 ```
   mms          IEC 61850 MMS (priority 10)
@@ -157,18 +166,62 @@ Output:
   profinet     PROFINET (Ethernet) (priority 100)
 ```
 
+### `otprobe version`
+
+```bash
+otprobe version
+```
+
+```
+otprobe version 0.1.0
+  branch:     main
+  revision:   abc1234
+  build user: ci
+  build date: 20250115-10:30:00
+  go version: go1.25.0
+  platform:   linux/amd64
+```
+
+### Dry-Run Mode
+
+For change-controlled OT environments — shows what **would** be tested
+without sending any network traffic:
+
+```bash
+otprobe detect --dry-run --ip 10.0.0.1 --port 502
+```
+
+```
+Dry-run: no network traffic will be sent
+
+Target:          10.0.0.1:502
+Timeout:         5s
+Global Timeout:  0s
+Parallel:        true
+Safe mode:       false
+Max concurrency: 0
+
+Protocol detection order:
+   1. mms          IEC 61850 MMS (priority 10)
+   2. s7           Siemens S7comm (priority 20)
+  ...
+```
+
 ### OT-Safe Mode
 
 For production ICS/SCADA environments where minimising network impact is
 critical:
 
 ```bash
-otprobe --ip 192.168.1.10 --port 502 --safe
+otprobe detect --ip 192.168.1.10 --port 502 --safe
 ```
 
-Safe mode forces sequential detection with low concurrency.
+Safe mode enforces:
+- Sequential detection (`--parallel=false`)
+- Max concurrency 1
+- 200ms minimum interval between probes
 
-### Options
+### Detect Flags
 
 | Flag | Description | Default |
 |---|---|---|
@@ -177,12 +230,14 @@ Safe mode forces sequential detection with low concurrency.
 | `--check` | Check specific protocol: `modbus`, `mms`, `s7`, `opcua`, `bacnet`, `can`, `profinet`, `dnp3`, `iec104`, `enip` | (all) |
 | `--timeout` | Per-protocol connection timeout | `5s` |
 | `--global-timeout` | Overall timeout for the entire run (0 = unlimited) | `0` |
-| `--verbose` | Show detailed detection info | `false` |
+| `--verbose` | Show detailed detection results | `false` |
+| `--debug` | Enable debug logging (per-protocol timings, connection errors) | `false` |
+| `--quiet` | Suppress non-error log output | `false` |
 | `--parallel` | Run protocol checks in parallel | `true` |
-| `--safe` | OT-safe mode: sequential, low concurrency | `false` |
+| `--safe` | OT-safe mode: sequential, min-interval=200ms, max-concurrency=1 | `false` |
+| `--max-concurrency` | Maximum parallel goroutines (0 = unbounded) | `0` |
 | `--output` | Output format: `text` or `json` | `text` |
-| `--version` | Print version information and exit | — |
-| `--list` | List supported protocols and exit | — |
+| `--dry-run` | Show detection plan without sending network traffic | `false` |
 
 ### Exit Codes
 
@@ -190,19 +245,32 @@ Safe mode forces sequential detection with low concurrency.
 |---|---|
 | 0 | Protocol detected (high confidence ≥ 0.9) |
 | 1 | Unknown protocol (no match) |
-| 2 | Connection error |
+| 2 | Connection error (transport-level failure: timeout, refused, unreachable) |
 | 3 | Invalid parameters |
 | 4 | Partial detection (matched but confidence < 0.9) |
 
 Exit codes are a **stable numeric API** — scripts can rely on them:
 
 ```bash
-otprobe --ip 10.0.0.1 --port 502 --output json
+otprobe detect --ip 10.0.0.1 --port 502 --output json
 case $? in
   0) echo "Detected with high confidence" ;;
   1) echo "No protocol detected" ;;
+  2) echo "Transport-level failure" ;;
   4) echo "Low-confidence detection — manual review" ;;
 esac
+```
+
+> **Note:** Exit code 2 always means "transport-level failure" — this includes
+> DNS resolution failures, timeouts, and connection refused errors.
+
+### Ambiguity Warning
+
+When multiple protocols match with medium confidence (< 0.9), `otprobe`
+prints a warning and returns exit code 4:
+
+```
+Warning: 2 protocols matched with medium confidence — manual review recommended
 ```
 
 ---
@@ -249,6 +317,15 @@ func main() {
 }
 ```
 
+### Convenience: DefaultRegistry
+
+```go
+import "github.com/boeboe/otfp"
+
+registry := otfp.DefaultRegistry() // all 10 protocols, canonical order
+engine := core.NewEngine(registry, core.DefaultEngineConfig())
+```
+
 ### Single Protocol Check
 
 ```go
@@ -273,8 +350,7 @@ func (l *logger) OnResult(r core.Result) {
 }
 
 func scan() {
-    reg := core.NewRegistry()
-    // ... register protocols ...
+    reg := otfp.DefaultRegistry()
 
     config := core.DefaultEngineConfig()
     config.Observer = &logger{}
@@ -335,6 +411,7 @@ registry.Register(&MyProtocolFingerprinter{})
 
 ```
 otfp/
+├── otfp.go                    # Convenience: DefaultRegistry()
 ├── core/                      # Core types and engine
 │   ├── engine.go              # Detection orchestration (parallel/sequential, observer, rate-limit)
 │   ├── errors.go              # Typed errors (DetectError, TimeoutError, ConnectionError, InvalidResponseError)
@@ -359,9 +436,12 @@ otfp/
 │   ├── iec104/                # IEC 60870-5-104 fingerprinter
 │   └── enip/                  # EtherNet/IP fingerprinter
 ├── cmd/
-│   └── otprobe/               # CLI tool
-│       ├── main.go            # CLI entry point (slog, JSON, safe-mode, --list)
-│       ├── buildinfo.go       # Version metadata
+│   └── otprobe/               # CLI tool (cobra subcommands)
+│       ├── main.go            # Cobra root + detect/list/version commands
+│       ├── buildinfo.go       # Version metadata (GoVersion, Platform)
+│       ├── config.go          # CLIConfig struct, ConfidenceLevel()
+│       ├── output.go          # JSON/text rendering, exit codes, structured errors
+│       ├── run.go             # Detection orchestration, dry-run, list
 │       └── version.txt        # Semantic version
 ├── go.mod
 ├── API.md                     # Library API reference
@@ -546,8 +626,11 @@ This library is designed for safe use in ICS/SCADA environments:
 - **No flooding** — one connection per check, graceful close
 - **Minimal footprint** — probes are the smallest valid frames possible
 - **Context-aware** — supports cancellation and configurable timeouts
-- **OT-safe mode** — sequential scanning with bounded concurrency
+- **OT-safe mode** — sequential scanning with bounded concurrency and 200ms
+  inter-probe delay
 - **Rate limiting** — `MinInterval` between probes prevents IDS alerts
+- **Signal handling** — SIGINT/SIGTERM trigger graceful context cancellation
+- **Dry-run** — preview the detection plan without sending any traffic
 
 > **Warning:** Even minimal protocol probes may trigger alerts in some IDS/IPS
 > systems configured for OT environments. Always obtain proper authorization

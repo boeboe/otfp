@@ -1,6 +1,6 @@
 # API Reference — `github.com/boeboe/otfp`
 
-> **Go ≥ 1.25** | Zero external dependencies | Pure stdlib
+> **Go ≥ 1.25** | Pure stdlib core | CLI uses [cobra](https://github.com/spf13/cobra)
 
 Complete reference for every exported type, function, and method. Sections
 follow the package layout.
@@ -9,6 +9,7 @@ follow the package layout.
 
 ## Table of Contents
 
+- [Package `otfp` (root)](#package-otfp-root)
 - [Package `core`](#package-core)
   - [Protocol](#protocol)
   - [Confidence](#confidence)
@@ -26,9 +27,24 @@ follow the package layout.
   - [Protocol List](#protocol-list)
 - [Package `transport`](#package-transport)
 - [CLI — `otprobe`](#cli--otprobe)
-  - [Flags](#flags)
+  - [Subcommands](#subcommands)
+  - [Detect Flags](#detect-flags)
   - [Exit Codes](#exit-codes)
   - [JSON Output](#json-output)
+
+---
+
+## Package `otfp` (root)
+
+```go
+import "github.com/boeboe/otfp"
+```
+
+Convenience package that re-exports common functionality.
+
+| Function          | Signature          | Description |
+|-------------------|--------------------|-------------|
+| `DefaultRegistry` | `() *core.Registry` | Returns a Registry pre-loaded with all 10 built-in protocol fingerprinters in canonical priority order. |
 
 ---
 
@@ -430,10 +446,18 @@ helpers used by all protocol fingerprinters.
 ## CLI — `otprobe`
 
 ```
-otprobe --ip <address> --port <port> [options]
+otprobe <command> [flags]
 ```
 
-### Flags
+### Subcommands
+
+| Command   | Description |
+|-----------|-------------|
+| `detect`  | Detect OT protocols on a target endpoint. |
+| `list`    | List supported protocols with priorities. |
+| `version` | Print version information (Go version, platform, build metadata). |
+
+### Detect Flags
 
 | Flag               | Type     | Default      | Description |
 |--------------------|----------|--------------|-------------|
@@ -442,12 +466,14 @@ otprobe --ip <address> --port <port> [options]
 | `--check`          | string   |              | Check specific protocol only. |
 | `--timeout`        | duration | `5s`         | Per-protocol connection timeout. |
 | `--global-timeout` | duration | `0`          | Overall timeout (0 = unlimited). |
-| `--verbose`        | bool     | `false`      | Show detailed detection info. |
+| `--verbose`        | bool     | `false`      | Show detailed detection results. |
+| `--debug`          | bool     | `false`      | Enable debug logging (timings, connection errors). |
+| `--quiet`          | bool     | `false`      | Suppress non-error log output. |
 | `--parallel`       | bool     | `true`       | Run protocol checks in parallel. |
-| `--safe`           | bool     | `false`      | OT-safe mode: sequential, low concurrency. |
+| `--safe`           | bool     | `false`      | OT-safe mode: sequential, min-interval=200ms, max-concurrency=1. |
+| `--max-concurrency`| int      | `0`          | Maximum parallel goroutines (0 = unbounded). |
 | `--output`         | string   | `text`       | Output format: `text` or `json`. |
-| `--version`        | bool     | `false`      | Print version and exit. |
-| `--list`           | bool     | `false`      | List supported protocols with priorities and exit. |
+| `--dry-run`        | bool     | `false`      | Show detection plan without sending network traffic. |
 
 ### Exit Codes
 
@@ -455,7 +481,7 @@ otprobe --ip <address> --port <port> [options]
 |-----:|---------|
 |  `0` | Protocol detected (high confidence ≥ 0.9). |
 |  `1` | Unknown protocol (no match). |
-|  `2` | Connection error. |
+|  `2` | Connection error (transport-level failure: timeout, refused, unreachable). |
 |  `3` | Invalid parameters. |
 |  `4` | Partial detection (matched but confidence < 0.9). |
 
@@ -471,6 +497,7 @@ When `--output json` is used, the output is a single JSON object:
   "protocol": "Modbus TCP",
   "matched": true,
   "confidence": 0.95,
+  "confidence_level": "high",
   "details": "Valid Modbus response with matching transaction ID",
   "fingerprint": {
     "id": "modbus.fc43",
@@ -481,17 +508,20 @@ When `--output json` is used, the output is a single JSON object:
 }
 ```
 
-| Field         | Type              | Presence | Description |
-|---------------|-------------------|----------|-------------|
-| `target`      | `string`          | Always   | `"host:port"` |
-| `protocol`    | `string`          | Always   | Protocol name or `"Unknown"`. |
-| `matched`     | `bool`            | Always   | Whether a protocol was detected. |
-| `confidence`  | `float64`         | Always   | Score `[0.0, 1.0]`. |
-| `details`     | `string`          | When non-empty | Human-readable notes. |
-| `error`       | `string`          | On error | Error message. |
-| `fingerprint` | `object`          | When available | `{id, signature, metadata?}`. |
-| `detection_id`| `string`          | Always   | 16-char hex unique ID. |
-| `timestamp`   | `string`          | Always   | RFC 3339 with nanoseconds. |
+| Field              | Type              | Presence | Description |
+|--------------------|-------------------|----------|-------------|
+| `target`           | `string`          | Always   | `"host:port"` |
+| `protocol`         | `string`          | Always   | Protocol name or `"Unknown"`. |
+| `matched`          | `bool`            | Always   | Whether a protocol was detected. |
+| `confidence`       | `float64`         | Always   | Score `[0.0, 1.0]`. |
+| `confidence_level` | `string`          | Always   | `"high"` (≥0.9), `"medium"` (≥0.5), `"low"` (>0), `"none"` (0). |
+| `details`          | `string`          | When non-empty | Human-readable notes. |
+| `error`            | `object`          | On error | `{type, message}` — structured error. |
+| `error.type`       | `string`          | On error | `"timeout"`, `"connection"`, `"invalid_response"`, `"detection"`, `"unknown"`. |
+| `error.message`    | `string`          | On error | Human-readable error message. |
+| `fingerprint`      | `object`          | When available | `{id, signature, metadata?}`. |
+| `detection_id`     | `string`          | Always   | 16-char hex unique ID. |
+| `timestamp`        | `string`          | Always   | RFC 3339 with nanoseconds. |
 
 ---
 
@@ -506,17 +536,13 @@ import (
     "context"
     "fmt"
 
+    "github.com/boeboe/otfp"
     "github.com/boeboe/otfp/core"
-    "github.com/boeboe/otfp/protocols/modbus"
-    "github.com/boeboe/otfp/protocols/s7"
 )
 
 func main() {
-    reg := core.NewRegistry()
-    _ = reg.Register(modbus.New())
-    _ = reg.Register(s7.New())
-
-    engine := core.NewEngine(reg, core.DefaultEngineConfig())
+    registry := otfp.DefaultRegistry()
+    engine := core.NewEngine(registry, core.DefaultEngineConfig())
     target := core.Target{IP: "192.168.1.100", Port: 502}
 
     result := engine.Detect(context.Background(), target)
@@ -543,8 +569,7 @@ func (l *logger) OnResult(r core.Result) {
 }
 
 func scan() {
-    reg := core.NewRegistry()
-    // ... register protocols ...
+    reg := otfp.DefaultRegistry()
 
     config := core.DefaultEngineConfig()
     config.Observer = &logger{}
@@ -581,25 +606,35 @@ if err := target.Validate(); err != nil {
 
 ```bash
 # Auto-detect protocol
-otprobe --ip 192.168.1.100 --port 502
+otprobe detect --ip 192.168.1.100 --port 502
 
 # Check specific protocol
-otprobe --ip 192.168.1.100 --port 502 --check modbus
+otprobe detect --ip 192.168.1.100 --port 502 --check modbus
 
 # JSON output
-otprobe --ip 192.168.1.100 --port 502 --output json
+otprobe detect --ip 192.168.1.100 --port 502 --output json
 
 # OT-safe mode with global timeout
-otprobe --ip 10.0.0.1 --port 102 --safe --global-timeout 30s
+otprobe detect --ip 10.0.0.1 --port 102 --safe --global-timeout 30s
+
+# Dry-run: preview without network traffic
+otprobe detect --dry-run --ip 10.0.0.1 --port 502
 
 # List supported protocols
-otprobe --list
+otprobe list
+
+# Version info
+otprobe version
+
+# Quiet mode for scripts
+otprobe detect --quiet --ip 10.0.0.1 --port 502 --output json
 
 # Use exit code in scripts
-otprobe --ip 10.0.0.1 --port 502 --output json
+otprobe detect --ip 10.0.0.1 --port 502 --output json
 case $? in
   0) echo "Detected with high confidence" ;;
   1) echo "No protocol detected" ;;
+  2) echo "Transport-level failure" ;;
   4) echo "Low-confidence detection" ;;
 esac
 ```

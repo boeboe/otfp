@@ -2,14 +2,13 @@ package main
 
 import (
 	"context"
-	"encoding/json"
-	"errors"
-	"flag"
 	"fmt"
 	"io"
 	"log/slog"
 	"os"
+	"os/signal"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/boeboe/otfp/core"
@@ -23,6 +22,7 @@ import (
 	"github.com/boeboe/otfp/protocols/opcua"
 	"github.com/boeboe/otfp/protocols/profinet"
 	"github.com/boeboe/otfp/protocols/s7"
+	"github.com/spf13/cobra"
 )
 
 // Build-time variables injected via ldflags.
@@ -34,173 +34,178 @@ var (
 	BuildDate = "unknown"
 )
 
-// Exit codes — stable numeric API for callers.
-const (
-	exitDetected  = 0
-	exitUnknown   = 1
-	exitConnError = 2
-	exitBadParams = 3
-	exitPartial   = 4 // matched but below high-confidence threshold
-)
-
-// protocolAliases maps short CLI names to typed Protocol identifiers.
-var protocolAliases = map[string]core.Protocol{
-	"modbus":   core.ProtocolModbus,
-	"mms":      core.ProtocolMMS,
-	"s7":       core.ProtocolS7,
-	"opcua":    core.ProtocolOPCUA,
-	"bacnet":   core.ProtocolBACnet,
-	"can":      core.ProtocolCAN,
-	"profinet": core.ProtocolPROFINET,
-	"dnp3":     core.ProtocolDNP3,
-	"iec104":   core.ProtocolIEC104,
-	"enip":     core.ProtocolENIP,
-}
-
 func main() {
-	os.Exit(run(os.Args[1:], os.Stdout, os.Stderr))
+	os.Exit(run(os.Stdout, os.Stderr))
 }
 
-// run is the real entry point. Returning an int keeps main() trivially testable.
-func run(args []string, stdout, stderr io.Writer) int {
-	// ---- flag parsing ----
-	fs := flag.NewFlagSet("otprobe", flag.ContinueOnError)
-	fs.SetOutput(stderr)
+// run builds the cobra command tree and executes. Returns exit code.
+func run(stdout, stderr io.Writer) int {
+	exitCode := exitDetected
 
-	ip := fs.String("ip", "", "Target IP address (required)")
-	port := fs.Int("port", 0, "Target TCP port (required)")
-	check := fs.String("check", "", "Check specific protocol: modbus, mms, s7, opcua, bacnet, can, profinet, dnp3, iec104, enip")
-	timeout := fs.Duration("timeout", 5*time.Second, "Per-protocol connection timeout")
-	globalTimeout := fs.Duration("global-timeout", 0, "Overall timeout for the entire run (0 = unlimited)")
-	verbose := fs.Bool("verbose", false, "Show detailed detection info")
-	parallel := fs.Bool("parallel", true, "Run protocol checks in parallel")
-	safe := fs.Bool("safe", false, "OT-safe mode: sequential, low concurrency, conservative timeouts")
-	output := fs.String("output", "text", "Output format: text or json")
-	showVersion := fs.Bool("version", false, "Print version information and exit")
-	listProtos := fs.Bool("list", false, "List supported protocols and exit")
-
-	fs.Usage = func() {
-		_, _ = fmt.Fprintf(stderr, "Usage: otprobe --ip <address> --port <port> [options]\n\n")
-		_, _ = fmt.Fprintf(stderr, "OT Protocol Fingerprinting Tool\n\n")
-		_, _ = fmt.Fprintf(stderr, "Options:\n")
-		fs.PrintDefaults()
-		_, _ = fmt.Fprintf(stderr, "\nSupported protocols for --check:\n")
-		_, _ = fmt.Fprintf(stderr, "  modbus    Modbus TCP\n")
-		_, _ = fmt.Fprintf(stderr, "  mms       IEC 61850 MMS (ISO-on-TCP)\n")
-		_, _ = fmt.Fprintf(stderr, "  s7        Siemens S7comm\n")
-		_, _ = fmt.Fprintf(stderr, "  opcua     OPC UA (Binary)\n")
-		_, _ = fmt.Fprintf(stderr, "  bacnet    BACnet/IP (BVLL)\n")
-		_, _ = fmt.Fprintf(stderr, "  can       CAN TCP Gateway (SLCAN)\n")
-		_, _ = fmt.Fprintf(stderr, "  profinet  PROFINET (DCE/RPC)\n")
-		_, _ = fmt.Fprintf(stderr, "  dnp3      DNP3 over TCP\n")
-		_, _ = fmt.Fprintf(stderr, "  iec104    IEC 60870-5-104\n")
-		_, _ = fmt.Fprintf(stderr, "  enip      EtherNet/IP (CIP)\n")
-		_, _ = fmt.Fprintf(stderr, "\nExit codes:\n")
-		_, _ = fmt.Fprintf(stderr, "  0  Protocol detected\n")
-		_, _ = fmt.Fprintf(stderr, "  1  Unknown protocol\n")
-		_, _ = fmt.Fprintf(stderr, "  2  Connection error\n")
-		_, _ = fmt.Fprintf(stderr, "  3  Invalid parameters\n")
-		_, _ = fmt.Fprintf(stderr, "  4  Partial detection (low confidence)\n")
+	// ---- root command ----
+	rootCmd := &cobra.Command{
+		Use:   "otprobe",
+		Short: "OT Protocol Fingerprinting Tool",
+		Long:  "Detect industrial protocols on network endpoints using safe, connection-level probes.",
+		CompletionOptions: cobra.CompletionOptions{
+			DisableDefaultCmd: true,
+		},
+		SilenceUsage:  true,
+		SilenceErrors: true,
 	}
 
-	if err := fs.Parse(args); err != nil {
+	// ---- detect command ----
+	var cfg CLIConfig
+	detectCmd := &cobra.Command{
+		Use:   "detect",
+		Short: "Detect OT protocols on a target endpoint",
+		Long: `Detect OT protocols on a target endpoint by sending minimal, standards-compliant
+probes and analysing responses. Use --check to test a specific protocol, or
+omit it to auto-detect all supported protocols.
+
+Exit codes:
+  0  Protocol detected (high confidence >= 0.9)
+  1  Unknown protocol (no match)
+  2  Connection error
+  3  Invalid parameters
+  4  Partial detection (matched but confidence < 0.9)`,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			code := runDetect(cfg, stdout, stderr)
+			exitCode = code
+			if code != exitDetected {
+				return &silentExit{code: code}
+			}
+			return nil
+		},
+	}
+
+	// detect flags
+	detectCmd.Flags().StringVar(&cfg.IP, "ip", "", "Target IP address (required)")
+	detectCmd.Flags().IntVar(&cfg.Port, "port", 0, "Target TCP port (required)")
+	detectCmd.Flags().StringVar(&cfg.Check, "check", "", "Check specific protocol: modbus, mms, s7, opcua, bacnet, can, profinet, dnp3, iec104, enip")
+	detectCmd.Flags().DurationVar(&cfg.Timeout, "timeout", 5*time.Second, "Per-protocol connection timeout")
+	detectCmd.Flags().DurationVar(&cfg.GlobalTimeout, "global-timeout", 0, "Overall timeout for the entire run (0 = unlimited)")
+	detectCmd.Flags().BoolVar(&cfg.Verbose, "verbose", false, "Show detailed detection results")
+	detectCmd.Flags().BoolVar(&cfg.Debug, "debug", false, "Enable debug logging (per-protocol timings, connection errors)")
+	detectCmd.Flags().BoolVar(&cfg.Quiet, "quiet", false, "Suppress non-error log output")
+	detectCmd.Flags().BoolVar(&cfg.Parallel, "parallel", true, "Run protocol checks in parallel")
+	detectCmd.Flags().BoolVar(&cfg.Safe, "safe", false, "OT-safe mode: sequential, min-interval=200ms, max-concurrency=1")
+	detectCmd.Flags().IntVar(&cfg.MaxConcurrency, "max-concurrency", 0, "Maximum parallel goroutines (0 = unbounded)")
+	detectCmd.Flags().StringVar(&cfg.Output, "output", "text", "Output format: text or json")
+	detectCmd.Flags().BoolVar(&cfg.DryRun, "dry-run", false, "Show detection plan without sending network traffic")
+	_ = detectCmd.MarkFlagRequired("ip")
+	_ = detectCmd.MarkFlagRequired("port")
+
+	// ---- list command ----
+	listCmd := &cobra.Command{
+		Use:   "list",
+		Short: "List supported protocols with priorities",
+		Run: func(cmd *cobra.Command, args []string) {
+			registry := defaultRegistry()
+			exitCode = runList(stdout, registry)
+		},
+	}
+
+	// ---- version command ----
+	versionCmd := &cobra.Command{
+		Use:   "version",
+		Short: "Print version information",
+		Run: func(cmd *cobra.Command, args []string) {
+			build := NewBuildInfo()
+			_, _ = fmt.Fprintf(stdout, "otprobe %s\n", build.String())
+		},
+	}
+
+	rootCmd.AddCommand(detectCmd, listCmd, versionCmd)
+
+	if err := rootCmd.Execute(); err != nil {
+		var se *silentExit
+		if ok := errorAs(err, &se); ok {
+			return se.code
+		}
+		_, _ = fmt.Fprintf(stderr, "Error: %v\n", err)
 		return exitBadParams
 	}
+	return exitCode
+}
 
-	// ---- version ----
-	build := BuildInfo{
-		Version:   Version,
-		Branch:    Branch,
-		Revision:  Revision,
-		BuildUser: BuildUser,
-		BuildDate: BuildDate,
-	}
+// runDetect is the main detection orchestration.
+func runDetect(cfg CLIConfig, stdout, stderr io.Writer) int {
+	// ---- logger ----
+	logger := initLogger(stderr, cfg.Verbose, cfg.Debug, cfg.Quiet)
 
-	if *showVersion {
-		_, _ = fmt.Fprintf(stdout, "otprobe %s\n", build.String())
-		return exitDetected
-	}
-
-	// ---- list protocols ----
-	if *listProtos {
-		reg := defaultRegistry()
-		for _, fp := range reg.All() {
-			_, _ = fmt.Fprintf(stdout, "  %-12s %s (priority %d)\n",
-				aliasForProtocol(fp.Name()), fp.Name(), fp.Priority())
-		}
-		return exitDetected
-	}
-
-	// ---- structured logger ----
-	logger := initLogger(stderr, *verbose)
-
+	build := NewBuildInfo()
 	logger.Info("starting otprobe", "version", build.Short())
 
-	// ---- validate params ----
-	if *ip == "" {
-		logger.Error("--ip is required")
-		fs.Usage()
-		return exitBadParams
-	}
+	// ---- validate ----
 	target := core.Target{
-		IP:      *ip,
-		Port:    *port,
-		Timeout: *timeout,
+		IP:      cfg.IP,
+		Port:    cfg.Port,
+		Timeout: cfg.Timeout,
 	}
 	if err := target.Validate(); err != nil {
 		logger.Error("invalid target", "error", err)
-		fs.Usage()
 		return exitBadParams
 	}
-	if *check != "" {
-		lower := strings.ToLower(*check)
+	if cfg.Check != "" {
+		lower := strings.ToLower(cfg.Check)
 		if _, ok := protocolAliases[lower]; !ok {
-			logger.Error("unknown protocol", "check", *check,
+			logger.Error("unknown protocol", "check", cfg.Check,
 				"supported", "modbus, mms, s7, opcua, bacnet, can, profinet, dnp3, iec104, enip")
 			return exitBadParams
 		}
 	}
-	if *output != "text" && *output != "json" {
-		logger.Error("--output must be text or json", "output", *output)
+	if cfg.Output != "text" && cfg.Output != "json" {
+		logger.Error("--output must be text or json", "output", cfg.Output)
 		return exitBadParams
 	}
 
-	// ---- safe mode overrides ----
-	if *safe {
-		logger.Info("OT-safe mode enabled: sequential, low concurrency")
-		*parallel = false
+	// ---- safe mode hardening ----
+	if cfg.Safe {
+		logger.Info("OT-safe profile active: sequential, min-interval=200ms, max-concurrency=1")
+		cfg.Parallel = false
+		cfg.MaxConcurrency = 1
 	}
 
-	// ---- build registry ----
+	// ---- registry ----
 	registry := defaultRegistry()
 
-	// ---- build engine config ----
+	// ---- dry-run ----
+	if cfg.DryRun {
+		return runDryRun(stdout, cfg, registry)
+	}
+
+	// ---- engine config ----
 	config := core.EngineConfig{
-		Parallel:                *parallel,
+		Parallel:                cfg.Parallel,
 		EarlyStop:               true,
 		HighConfidenceThreshold: 0.9,
+		MaxConcurrency:          cfg.MaxConcurrency,
 	}
-	if *safe {
+	if cfg.Safe {
 		config = core.SafeEngineConfig()
 		config.EarlyStop = true
+		config.MinInterval = 200 * time.Millisecond
 	}
 	engine := core.NewEngine(registry, config)
 
-	// ---- context ----
-	ctx := context.Background()
-	if *globalTimeout > 0 {
+	// ---- context with signal handling ----
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+
+	if cfg.GlobalTimeout > 0 {
 		var cancel context.CancelFunc
-		ctx, cancel = context.WithTimeout(ctx, *globalTimeout)
+		ctx, cancel = context.WithTimeout(ctx, cfg.GlobalTimeout)
 		defer cancel()
 	}
 
-	logger.Info("scanning target", "ip", *ip, "port", *port, "parallel", *parallel)
+	logger.Info("scanning target", "ip", cfg.IP, "port", cfg.Port, "parallel", cfg.Parallel)
 
 	// ---- run detection ----
-	if *check != "" {
-		return runSpecificCheck(ctx, logger, engine, target, *check, *output, stdout)
+	if cfg.Check != "" {
+		return runSpecificCheck(ctx, logger, engine, target, cfg.Check, cfg.Output, stdout)
 	}
-	return runFullDetection(ctx, logger, engine, target, *verbose, *output, stdout)
+	return runFullDetection(ctx, logger, engine, target, cfg.Verbose, cfg.Output, stdout)
 }
 
 // defaultRegistry returns a registry pre-loaded with all known protocols.
@@ -219,115 +224,15 @@ func defaultRegistry() *core.Registry {
 	return registry
 }
 
-func runSpecificCheck(ctx context.Context, logger *slog.Logger, engine *core.Engine, target core.Target, protocol, format string, w io.Writer) int {
-	lower := strings.ToLower(protocol)
-	proto := protocolAliases[lower]
-
-	logger.Info("checking specific protocol", "protocol", proto)
-
-	result, err := engine.DetectProtocol(ctx, target, proto)
-	if err != nil {
-		logger.Error("detection error", "protocol", proto, "error", err)
-		var pnf *core.ProtocolNotFoundError
-		if errors.As(err, &pnf) {
-			return exitBadParams
-		}
-		return exitConnError
-	}
-
-	if format == "json" {
-		return writeJSON(w, target, result)
-	}
-
-	if result.Matched {
-		_, _ = fmt.Fprintf(w, "%s: true\n", capitalizeFirst(lower))
-		_, _ = fmt.Fprintf(w, "Confidence: %.2f\n", result.Confidence)
-		_, _ = fmt.Fprintf(w, "Details: %s\n", result.Details)
-		return exitCodeForResult(result)
-	}
-	_, _ = fmt.Fprintf(w, "%s: false\n", capitalizeFirst(lower))
-	return exitUnknown
-}
-
-func runFullDetection(ctx context.Context, logger *slog.Logger, engine *core.Engine, target core.Target, verbose bool, format string, w io.Writer) int {
-	result := engine.Detect(ctx, target)
-
-	logger.Info("detection complete",
-		"protocol", result.Protocol,
-		"matched", result.Matched,
-		"confidence", result.Confidence)
-
-	if format == "json" {
-		return writeJSON(w, target, result)
-	}
-
-	_, _ = fmt.Fprintf(w, "Target: %s\n", target.Addr())
-
-	if !result.Matched {
-		_, _ = fmt.Fprintln(w, "Detected: Unknown")
-		return exitUnknown
-	}
-
-	_, _ = fmt.Fprintf(w, "Detected: %s\n", result.Protocol)
-	_, _ = fmt.Fprintf(w, "Confidence: %.2f\n", result.Confidence)
-
-	if verbose {
-		_, _ = fmt.Fprintf(w, "Details: %s\n", result.Details)
-
-		results := engine.DetectAll(ctx, target)
-		if len(results) > 1 {
-			_, _ = fmt.Fprintln(w, "\nAll results:")
-			for _, r := range results {
-				status := "no match"
-				if r.Matched {
-					status = fmt.Sprintf("matched (%.2f)", r.Confidence)
-				}
-				_, _ = fmt.Fprintf(w, "  %-20s %s\n", r.Protocol, status)
-			}
-		}
-	}
-
-	return exitCodeForResult(result)
-}
-
-// jsonOutput is the machine-readable result envelope.
-type jsonOutput struct {
-	Target      string            `json:"target"`
-	Protocol    string            `json:"protocol"`
-	Matched     bool              `json:"matched"`
-	Confidence  float64           `json:"confidence"`
-	Details     string            `json:"details,omitempty"`
-	Error       string            `json:"error,omitempty"`
-	Fingerprint *core.Fingerprint `json:"fingerprint,omitempty"`
-	DetectionID string            `json:"detection_id"`
-	Timestamp   string            `json:"timestamp"`
-}
-
-func writeJSON(w io.Writer, target core.Target, r core.Result) int {
-	out := jsonOutput{
-		Target:      target.Addr(),
-		Protocol:    r.Protocol.String(),
-		Matched:     r.Matched,
-		Confidence:  float64(r.Confidence),
-		Details:     r.Details,
-		Fingerprint: r.Fingerprint,
-		DetectionID: r.DetectionID,
-		Timestamp:   r.Timestamp.Format(time.RFC3339Nano),
-	}
-	if r.Error != nil {
-		out.Error = r.Error.Error()
-	}
-
-	enc := json.NewEncoder(w)
-	enc.SetIndent("", "  ")
-	_ = enc.Encode(out) //nolint:errcheck
-
-	return exitCodeForResult(r)
-}
-
-func initLogger(w io.Writer, verbose bool) *slog.Logger {
+func initLogger(w io.Writer, verbose, debug, quiet bool) *slog.Logger {
 	level := slog.LevelInfo
+	if quiet {
+		level = slog.LevelError
+	}
 	if verbose {
+		level = slog.LevelDebug
+	}
+	if debug {
 		level = slog.LevelDebug
 	}
 	return slog.New(slog.NewTextHandler(w, &slog.HandlerOptions{
@@ -335,30 +240,27 @@ func initLogger(w io.Writer, verbose bool) *slog.Logger {
 	}))
 }
 
-func capitalizeFirst(s string) string {
-	if len(s) == 0 {
-		return s
-	}
-	return strings.ToUpper(s[:1]) + s[1:]
+// silentExit is used to propagate a non-zero exit code through cobra without
+// printing an additional error message.
+type silentExit struct {
+	code int
 }
 
-// exitCodeForResult returns the appropriate exit code based on result.
-func exitCodeForResult(r core.Result) int {
-	if !r.Matched {
-		return exitUnknown
-	}
-	if r.Confidence.IsHigh(0.9) {
-		return exitDetected
-	}
-	return exitPartial
+func (e *silentExit) Error() string {
+	return fmt.Sprintf("exit code %d", e.code)
 }
 
-// aliasForProtocol returns the short CLI alias for a protocol.
-func aliasForProtocol(p core.Protocol) string {
-	for alias, proto := range protocolAliases {
-		if proto == p {
-			return alias
+// errorAs is a type-safe errors.As wrapper that avoids issues with
+// the linter complaining about target types.
+func errorAs(err error, target interface{}) bool {
+	switch t := target.(type) {
+	case **silentExit:
+		se, ok := err.(*silentExit) //nolint:errorlint
+		if ok {
+			*t = se
 		}
+		return ok
+	default:
+		return false
 	}
-	return p.String()
 }
