@@ -40,3 +40,54 @@ func TestEffectiveTimeout(t *testing.T) {
 		}
 	})
 }
+
+func TestTargetValidate(t *testing.T) {
+	t.Run("valid target", func(t *testing.T) {
+		target := Target{IP: "192.168.1.1", Port: 502, Timeout: 5 * time.Second}
+		if err := target.Validate(); err != nil {
+			t.Errorf("Validate() error: %v", err)
+		}
+	})
+
+	t.Run("valid ipv6", func(t *testing.T) {
+		target := Target{IP: "::1", Port: 502}
+		if err := target.Validate(); err != nil {
+			t.Errorf("Validate() error for IPv6: %v", err)
+		}
+	})
+
+	t.Run("invalid IP", func(t *testing.T) {
+		target := Target{IP: "not-an-ip", Port: 502}
+		if err := target.Validate(); err == nil {
+			t.Error("Validate() should fail for invalid IP")
+		}
+	})
+
+	t.Run("port too low", func(t *testing.T) {
+		target := Target{IP: "127.0.0.1", Port: 0}
+		if err := target.Validate(); err == nil {
+			t.Error("Validate() should fail for port 0")
+		}
+	})
+
+	t.Run("port too high", func(t *testing.T) {
+		target := Target{IP: "127.0.0.1", Port: 70000}
+		if err := target.Validate(); err == nil {
+			t.Error("Validate() should fail for port 70000")
+		}
+	})
+
+	t.Run("negative timeout", func(t *testing.T) {
+		target := Target{IP: "127.0.0.1", Port: 502, Timeout: -1 * time.Second}
+		if err := target.Validate(); err == nil {
+			t.Error("Validate() should fail for negative timeout")
+		}
+	})
+
+	t.Run("zero timeout is valid", func(t *testing.T) {
+		target := Target{IP: "127.0.0.1", Port: 502, Timeout: 0}
+		if err := target.Validate(); err != nil {
+			t.Errorf("Validate() should accept zero timeout: %v", err)
+		}
+	})
+}

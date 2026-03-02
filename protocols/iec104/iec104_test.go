@@ -234,8 +234,8 @@ func TestIEC104DetectSFormat(t *testing.T) {
 
 func TestIEC104Name(t *testing.T) {
 	fp := New()
-	if fp.Name() != "IEC 60870-5-104" {
-		t.Errorf("Name() = %q, want %q", fp.Name(), "IEC 60870-5-104")
+	if fp.Name() != core.ProtocolIEC104 {
+		t.Errorf("Name() = %s, want %s", fp.Name(), core.ProtocolIEC104)
 	}
 }
 

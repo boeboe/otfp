@@ -152,8 +152,8 @@ func TestBACnetDetectConnectionRefused(t *testing.T) {
 
 func TestBACnetName(t *testing.T) {
 	fp := New()
-	if fp.Name() != "BACnet/IP" {
-		t.Errorf("Name() = %q, want %q", fp.Name(), "BACnet/IP")
+	if fp.Name() != core.ProtocolBACnet {
+		t.Errorf("Name() = %s, want %s", fp.Name(), core.ProtocolBACnet)
 	}
 }
 

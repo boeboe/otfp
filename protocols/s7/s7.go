@@ -105,7 +105,7 @@ func (f *Fingerprinter) Detect(ctx context.Context, target core.Target) (core.Re
 }
 
 // validateCOTPResponse validates the COTP Connection Confirm.
-func validateCOTPResponse(resp []byte) (bool, float64, string) {
+func validateCOTPResponse(resp []byte) (bool, core.Confidence, string) {
 	if len(resp) < iso.TPKTHeaderLen+2 {
 		return false, 0, ""
 	}
@@ -162,7 +162,7 @@ func buildS7SetupProbe() []byte {
 }
 
 // validateS7Response validates the S7 Setup Communication response.
-func validateS7Response(resp []byte, baseConfidence float64, baseDetails string) core.Result {
+func validateS7Response(resp []byte, baseConfidence core.Confidence, baseDetails string) core.Result {
 	if len(resp) < iso.TPKTHeaderLen+3 {
 		return core.NoMatch(protocolName)
 	}
@@ -250,5 +250,10 @@ func validateS7Response(resp []byte, baseConfidence float64, baseDetails string)
 		return core.NoMatch(protocolName)
 	}
 
-	return core.Match(protocolName, confidence, details)
+	result := core.Match(protocolName, confidence, details)
+	result.Fingerprint = &core.Fingerprint{
+		ID:        "s7.setup_comm",
+		Signature: details,
+	}
+	return result
 }

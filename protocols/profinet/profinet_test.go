@@ -246,8 +246,8 @@ func TestPROFINETDetectConnectionRefused(t *testing.T) {
 
 func TestPROFINETName(t *testing.T) {
 	fp := New()
-	if fp.Name() != "PROFINET (Ethernet)" {
-		t.Errorf("Name() = %q, want %q", fp.Name(), "PROFINET (Ethernet)")
+	if fp.Name() != core.ProtocolPROFINET {
+		t.Errorf("Name() = %s, want %s", fp.Name(), core.ProtocolPROFINET)
 	}
 }
 

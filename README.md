@@ -1,6 +1,6 @@
 # otfp — OT Protocol Fingerprinting Library
 
-[![Go](https://img.shields.io/badge/Go-1.21+-00ADD8?style=flat&logo=go)](https://go.dev/)
+[![Go](https://img.shields.io/badge/Go-1.25+-00ADD8?style=flat&logo=go)](https://go.dev/)
 [![Zero Dependencies](https://img.shields.io/badge/dependencies-0-brightgreen)](https://pkg.go.dev/github.com/boeboe/otfp)
 
 A pure Golang library for OT (Operational Technology) protocol fingerprinting at the **connection level only**. Detects industrial protocols based on transport framing and handshake behavior — without invoking application-layer logic.
@@ -39,7 +39,11 @@ All protocols above are detectable over raw TCP connections. Some notes on real-
 - **Minimal payloads** — standards-compliant, safe for ICS environments
 - **Deterministic detection** — confidence scoring based on protocol framing validation
 - **Priority-based ordering** — protocols tested in optimal priority order with early stop
-- **Structured error handling** — typed errors (`TimeoutError`, `ConnectionError`, `DetectError`)
+- **Structured error handling** — typed errors (`TimeoutError`, `ConnectionError`, `InvalidResponseError`, `DetectError`)
+- **Typed confidence scoring** — `Confidence` type with `Valid()` and `IsHigh()` methods
+- **Structured fingerprints** — `Fingerprint` type with ID, Signature, and Metadata
+- **Observability** — `Observer` interface for metrics, tracing, and audit logging
+- **Rate limiting** — configurable `MinInterval` between probes for IDS-safe scanning
 - **Zero external dependencies** — pure Go standard library
 
 ## Installation
@@ -94,7 +98,13 @@ otprobe --ip 192.168.1.10 --port 502 --output json
   "protocol": "Modbus TCP",
   "matched": true,
   "confidence": 0.95,
-  "details": "MBAP header valid, TxID echoed"
+  "details": "MBAP header valid, TxID echoed",
+  "fingerprint": {
+    "id": "modbus.fc43",
+    "signature": "MBAP header valid, TxID echoed"
+  },
+  "detection_id": "a1b2c3d4e5f67890",
+  "timestamp": "2025-01-15T10:30:00.123456789Z"
 }
 ```
 
@@ -122,15 +132,17 @@ Safe mode forces sequential detection with low concurrency.
 | `--safe` | OT-safe mode: sequential, low concurrency | `false` |
 | `--output` | Output format: `text` or `json` | `text` |
 | `--version` | Print version information and exit | — |
+| `--list` | List supported protocols and exit | — |
 
 ### Exit Codes
 
 | Code | Meaning |
 |---|---|
-| 0 | Protocol detected |
+| 0 | Protocol detected (high confidence ≥ 0.9) |
 | 1 | Unknown protocol |
 | 2 | Connection error |
 | 3 | Invalid parameters |
+| 4 | Partial detection (matched but confidence < 0.9) |
 
 ## Library Usage
 
@@ -192,14 +204,16 @@ engine := core.NewEngine(registry, core.SafeEngineConfig())
 ### Custom Fingerprinter
 
 ```go
+// Custom protocols must use a Protocol constant registered with the library.
+// For illustration, this example reuses an existing constant.
 type MyProtocolFingerprinter struct{}
 
-func (f *MyProtocolFingerprinter) Name() core.Protocol { return "MyProtocol" }
+func (f *MyProtocolFingerprinter) Name() core.Protocol { return core.ProtocolModbus }
 func (f *MyProtocolFingerprinter) Priority() int       { return 200 }
 
 func (f *MyProtocolFingerprinter) Detect(ctx context.Context, target core.Target) (core.Result, error) {
     // Your detection logic here...
-    return core.Match("MyProtocol", 0.9, "valid response"), nil
+    return core.Match(core.ProtocolModbus, 0.9, "valid response"), nil
 }
 
 registry.Register(&MyProtocolFingerprinter{})

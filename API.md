@@ -1,93 +1,184 @@
-# API Reference
+# API Reference — `github.com/boeboe/otfp`
 
-Developer guide for using the `otfp` library in your own Go programs.
+> **Go ≥ 1.25** | Zero external dependencies | Pure stdlib
 
-> **Module path:** `github.com/boeboe/otfp`
-> **Go version:** 1.21+ (uses `log/slog` from stdlib)
-> **External dependencies:** none — pure Go standard library
+This document covers every exported type, function, and method in the `otfp`
+library. Sections follow the package layout.
 
 ---
 
-## Quick Start
+## Table of Contents
+
+- [Package `core`](#package-core)
+  - [Protocol](#protocol)
+  - [Confidence](#confidence)
+  - [Fingerprint](#fingerprint)
+  - [Result](#result)
+  - [Target](#target)
+  - [Fingerprinter (interface)](#fingerprinter-interface)
+  - [Registry](#registry)
+  - [Engine & EngineConfig](#engine--engineconfig)
+  - [Observer (interface)](#observer-interface)
+  - [ScanReport](#scanreport)
+  - [Errors](#errors)
+- [Protocol Packages](#protocol-packages)
+  - [Detection Order & Priorities](#detection-order--priorities)
+  - [Protocol List](#protocol-list)
+- [CLI — `otprobe`](#cli--otprobe)
+  - [Flags](#flags)
+  - [Exit Codes](#exit-codes)
+  - [JSON Output](#json-output)
+
+---
+
+## Package `core`
+
+```
+import "github.com/boeboe/otfp/core"
+```
+
+### Protocol
 
 ```go
-package main
+type Protocol uint8
+```
 
-import (
-    "context"
-    "fmt"
-    "time"
+Type-safe protocol identifier stored as a compact integer. Values are **stable
+across versions** and must not be reordered.
 
-    "github.com/boeboe/otfp/core"
-    "github.com/boeboe/otfp/protocols/modbus"
-    "github.com/boeboe/otfp/protocols/mms"
-    "github.com/boeboe/otfp/protocols/s7"
-)
+| Constant            | Value | String              |
+|---------------------|------:|---------------------|
+| `ProtocolUnknown`   |     0 | `Unknown`           |
+| `ProtocolModbus`    |     1 | `Modbus TCP`        |
+| `ProtocolMMS`       |     2 | `IEC 61850 MMS`     |
+| `ProtocolS7`        |     3 | `Siemens S7comm`    |
+| `ProtocolOPCUA`     |     4 | `OPC UA`            |
+| `ProtocolBACnet`    |     5 | `BACnet/IP`         |
+| `ProtocolCAN`       |     6 | `CAN (TCP Gateway)` |
+| `ProtocolPROFINET`  |     7 | `PROFINET (Ethernet)` |
+| `ProtocolDNP3`      |     8 | `DNP3 (TCP)`        |
+| `ProtocolIEC104`    |     9 | `IEC 60870-5-104`   |
+| `ProtocolENIP`      |    10 | `EtherNet/IP`       |
 
-func main() {
-    registry := core.NewRegistry()
-    _ = registry.Register(mms.New())
-    _ = registry.Register(s7.New())
-    _ = registry.Register(modbus.New())
+#### Methods
 
-    engine := core.NewEngine(registry, core.DefaultEngineConfig())
+| Method | Signature | Description |
+|--------|-----------|-------------|
+| `String` | `() string` | Human-readable name via lookup table. Out-of-range returns `"Unknown"`. |
+| `IsValid` | `() bool` | True when `p > 0 && p < protocolCount`. |
 
-    target := core.Target{
-        IP:      "192.168.1.10",
-        Port:    502,
-        Timeout: 5 * time.Second,
-    }
+#### Functions
 
-    result := engine.Detect(context.Background(), target)
-    fmt.Printf("Protocol: %s (confidence %.2f)\n", result.Protocol, result.Confidence)
+| Function | Signature | Description |
+|----------|-----------|-------------|
+| `ParseProtocol` | `(s string) (Protocol, error)` | Reverse lookup from name string. |
+| `AllProtocols` | `() []Protocol` | All 10 protocols in recommended detection order. |
+
+---
+
+### Confidence
+
+```go
+type Confidence float64
+```
+
+Named floating-point type preventing accidental misuse in arithmetic with raw
+`float64` values.
+
+#### Methods
+
+| Method | Signature | Description |
+|--------|-----------|-------------|
+| `Valid` | `() bool` | True when `0.0 ≤ c ≤ 1.0`. |
+| `IsHigh` | `(threshold float64) bool` | True when `c ≥ threshold`. |
+
+---
+
+### Fingerprint
+
+```go
+type Fingerprint struct {
+    ID       string            `json:"id"`
+    Signature string           `json:"signature"`
+    Metadata map[string]string `json:"metadata,omitempty"`
 }
 ```
 
+Structured identification data from a detection, suitable for SIEM
+integration and asset inventory databases.
+
+- **ID**: Dot-separated identifier, e.g. `"modbus.fc43"`, `"s7.setup_comm"`.
+- **Signature**: Compact machine-parseable string of key observations.
+- **Metadata**: Protocol-specific key-value pairs.
+
+#### Methods
+
+| Method | Signature | Description |
+|--------|-----------|-------------|
+| `String` | `() string` | Returns `"id:signature"`. Nil-safe (returns `""`). |
+
 ---
 
-## Core Types
-
-### `Protocol`
+### Result
 
 ```go
-type Protocol string
+type Result struct {
+    Protocol    Protocol
+    Matched     bool
+    Confidence  Confidence
+    Details     string
+    Error       error
+    Fingerprint *Fingerprint
+    DetectionID string
+    Timestamp   time.Time
+}
 ```
 
-Type-safe protocol identifier. Provides compile-time safety while remaining
-human-readable in logs and JSON output.
+Outcome of a single fingerprint detection attempt.
 
-**Constants:**
+#### Detection Semantics
 
-| Constant | Value |
-|---|---|
-| `ProtocolUnknown` | `"Unknown"` |
-| `ProtocolModbus` | `"Modbus TCP"` |
-| `ProtocolMMS` | `"IEC 61850 MMS"` |
-| `ProtocolS7` | `"Siemens S7comm"` |
-| `ProtocolOPCUA` | `"OPC UA"` |
-| `ProtocolBACnet` | `"BACnet/IP"` |
-| `ProtocolCAN` | `"CAN (TCP Gateway)"` |
-| `ProtocolPROFINET` | `"PROFINET (Ethernet)"` |
-| `ProtocolDNP3` | `"DNP3 (TCP)"` |
-| `ProtocolIEC104` | `"IEC 60870-5-104"` |
-| `ProtocolENIP` | `"EtherNet/IP"` |
+| Scenario           | Matched | Error                  | Confidence |
+|--------------------|---------|------------------------|------------|
+| Positive match     | `true`  | `nil`                  | `> 0`      |
+| No match           | `false` | `nil`                  | `0`        |
+| Timeout            | `false` | `*TimeoutError`        | `0`        |
+| Connection refused | `false` | `*ConnectionError`     | `0`        |
+| Invalid response   | `false` | `*InvalidResponseError`| `0`        |
 
-**Methods:**
+#### Fields
 
-| Method | Description |
-|---|---|
-| `String() string` | Returns the protocol name as a plain string |
-| `IsValid() bool` | Reports whether the protocol is a known, non-Unknown identifier |
+| Field         | Type           | Description |
+|---------------|----------------|-------------|
+| `Protocol`    | `Protocol`     | Protocol this result relates to. |
+| `Matched`     | `bool`         | True if protocol was positively identified. |
+| `Confidence`  | `Confidence`   | Score in `[0.0, 1.0]`. |
+| `Details`     | `string`       | Human-readable detection notes. |
+| `Error`       | `error`        | Underlying error (nil on success). |
+| `Fingerprint` | `*Fingerprint` | Structured ID data (nil when unavailable). |
+| `DetectionID` | `string`       | 16-char hex unique ID for audit trails. |
+| `Timestamp`   | `time.Time`    | When the result was created. |
 
-**Functions:**
+#### Methods
 
-| Function | Description |
-|---|---|
-| `AllProtocols() []Protocol` | Returns every known protocol in recommended detection order |
+| Method | Signature | Description |
+|--------|-----------|-------------|
+| `String` | `() string` | Human-readable summary. |
+| `WithFingerprint` | `(fp *Fingerprint) Result` | Returns a copy with fingerprint set. |
+
+#### Constructors
+
+| Function | Signature | Description |
+|----------|-----------|-------------|
+| `NoMatch` | `(protocol Protocol) Result` | No detection; Confidence=0. |
+| `Match` | `(protocol Protocol, confidence Confidence, details string) Result` | Positive detection. |
+| `ErrorResult` | `(protocol Protocol, err error) Result` | Detection failure. |
+
+All constructors auto-generate `DetectionID` (crypto/rand) and `Timestamp`.
 
 ---
 
-### `Target`
+### Target
 
 ```go
 type Target struct {
@@ -97,336 +188,343 @@ type Target struct {
 }
 ```
 
-Defines the network endpoint to probe.
+Network endpoint to fingerprint.
 
-| Field | Description |
-|---|---|
-| `IP` | Target IP address |
-| `Port` | Target TCP port |
-| `Timeout` | Per-protocol connection timeout (0 = `DefaultTimeout` of 5s) |
+| Constant | Value | Description |
+|----------|-------|-------------|
+| `DefaultTimeout` | `5s` | Used when `Timeout` is zero. |
 
-**Methods:**
+#### Methods
 
-| Method | Description |
-|---|---|
-| `Addr() string` | Returns `"host:port"` string |
-| `EffectiveTimeout() time.Duration` | Returns `Timeout` or `DefaultTimeout` if zero |
-
----
-
-### `Result`
-
-```go
-type Result struct {
-    Protocol    Protocol
-    Matched     bool
-    Confidence  float64
-    Details     string
-    Error       error
-    Fingerprint string
-}
-```
-
-Holds the outcome of a fingerprint detection attempt.
-
-| Field | Description |
-|---|---|
-| `Protocol` | Protocol this result relates to |
-| `Matched` | `true` if the protocol was positively identified |
-| `Confidence` | Score between 0.0 and 1.0 (0.0 = no match, 1.0 = definitive) |
-| `Details` | Human-readable detection information |
-| `Error` | Underlying error when detection fails (distinguishes "no match" from "unreachable") |
-| `Fingerprint` | Opaque identifier for correlating log entries |
-
-**Constructors:**
-
-```go
-// Positive detection
-result := core.Match(core.ProtocolModbus, 0.95, "MBAP header valid, TxID echoed")
-
-// No match
-result := core.NoMatch(core.ProtocolModbus)
-
-// Detection error (could not reach host, timeout, etc.)
-result := core.ErrorResult(core.ProtocolModbus, err)
-```
+| Method | Signature | Description |
+|--------|-----------|-------------|
+| `Addr` | `() string` | Returns `"host:port"` string. |
+| `EffectiveTimeout` | `() time.Duration` | Returns `Timeout` or `DefaultTimeout`. |
+| `Validate` | `() error` | Checks IP parseable, port `[1, 65535]`, timeout ≥ 0. |
 
 ---
 
-### `Fingerprinter` (interface)
+### Fingerprinter (interface)
 
 ```go
 type Fingerprinter interface {
-    Name() Protocol
+    Name()     Protocol
     Priority() int
     Detect(ctx context.Context, target Target) (Result, error)
 }
 ```
 
-The interface every protocol detector must implement.
+Each protocol detector implements this interface. Implementations must be
+safe for concurrent use and must never panic.
 
 | Method | Description |
-|---|---|
-| `Name()` | Returns the `Protocol` identifier this fingerprinter detects |
-| `Priority()` | Detection order priority (lower = tested first); by convention spaced in increments of 10 |
-| `Detect()` | Probes the target; must respect context cancellation and never panic |
-
-Implementations must be safe for concurrent use.
+|--------|-------------|
+| `Name()` | Protocol identifier this fingerprinter detects. |
+| `Priority()` | Detection order (lower = tested first). Conventionally spaced by 10. |
+| `Detect()` | Attempts identification; respects context cancellation and timeout. |
 
 ---
 
-### `Registry`
+### Registry
 
 ```go
 type Registry struct { /* unexported fields */ }
 ```
 
-Thread-safe collection of registered fingerprinters.
+Thread-safe container for registered fingerprinters.
 
-| Method | Description |
-|---|---|
-| `NewRegistry() *Registry` | Creates an empty registry |
-| `Register(fp Fingerprinter) error` | Adds a fingerprinter; returns error if name is already registered |
-| `Get(protocol Protocol) Fingerprinter` | Returns the fingerprinter for a protocol, or `nil` |
-| `All() []Fingerprinter` | Returns all fingerprinters sorted by priority (lowest first) |
-| `Names() []Protocol` | Returns protocol identifiers of all registered fingerprinters |
+#### Functions
+
+| Function | Signature | Description |
+|----------|-----------|-------------|
+| `NewRegistry` | `() *Registry` | Creates an empty registry. |
+
+#### Methods
+
+| Method | Signature | Description |
+|--------|-----------|-------------|
+| `Register` | `(fp Fingerprinter) error` | Adds a fingerprinter; error on duplicate name. |
+| `Get` | `(protocol Protocol) Fingerprinter` | Lookup by protocol; nil if not found. |
+| `All` | `() []Fingerprinter` | All registered, sorted by priority ascending. |
+| `Names` | `() []Protocol` | Protocol identifiers of all registered. |
 
 ---
 
-### `EngineConfig`
+### Engine & EngineConfig
 
 ```go
 type EngineConfig struct {
     Parallel                bool
     EarlyStop               bool
-    HighConfidenceThreshold float64
+    HighConfidenceThreshold Confidence
     MaxConcurrency          int
+    MinInterval             time.Duration
+    Observer                Observer
 }
 ```
 
-| Field | Default | Safe | Description |
-|---|---|---|---|
-| `Parallel` | `true` | `false` | Run protocol detections concurrently |
-| `EarlyStop` | `true` | `true` | Stop after first high-confidence match |
-| `HighConfidenceThreshold` | `0.9` | `0.9` | Minimum confidence to trigger early stop |
-| `MaxConcurrency` | `0` (unbounded) | `1` | Max in-flight goroutines (0 = unlimited) |
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `Parallel` | `bool` | `true` | Run protocol checks concurrently. |
+| `EarlyStop` | `bool` | `true` | Stop after first high-confidence match. |
+| `HighConfidenceThreshold` | `Confidence` | `0.9` | Threshold for early-stop. |
+| `MaxConcurrency` | `int` | `0` | Max parallel goroutines (0 = unbounded). |
+| `MinInterval` | `time.Duration` | `0` | Minimum delay between probes (IDS-safe). |
+| `Observer` | `Observer` | `nil` | Receives callbacks during detection. |
 
-**Preset constructors:**
+#### Preset Configurations
 
-```go
-config := core.DefaultEngineConfig()  // parallel, early-stop, unbounded
-config := core.SafeEngineConfig()     // sequential, max-concurrency=1
-```
+| Function | Description |
+|----------|-------------|
+| `DefaultEngineConfig()` | Parallel, early-stop, unbounded concurrency. |
+| `SafeEngineConfig()` | Sequential, early-stop, max concurrency 1. |
+
+#### Engine Methods
+
+| Method | Signature | Description |
+|--------|-----------|-------------|
+| `NewEngine` | `(registry *Registry, config EngineConfig) *Engine` | Creates engine. |
+| `Detect` | `(ctx, target) Result` | Best single match (or `ProtocolUnknown`). |
+| `DetectAll` | `(ctx, target) []Result` | All results sorted by confidence descending. |
+| `DetectProtocol` | `(ctx, target, Protocol) (Result, error)` | Single named protocol. |
+| `Scan` | `(ctx, target) ScanReport` | Full sweep with timing metadata. |
 
 ---
 
-### `Engine`
+### Observer (interface)
 
 ```go
-type Engine struct { /* unexported fields */ }
+type Observer interface {
+    OnStart(protocol Protocol, target Target)
+    OnResult(result Result)
+}
 ```
 
-Orchestrates protocol detection across registered fingerprinters.
-
-| Method | Description |
-|---|---|
-| `NewEngine(registry *Registry, config EngineConfig) *Engine` | Creates a new engine |
-| `Detect(ctx context.Context, target Target) Result` | Best match (or `ProtocolUnknown`) |
-| `DetectAll(ctx context.Context, target Target) []Result` | All results sorted by confidence (desc) |
-| `DetectProtocol(ctx context.Context, target Target, protocol Protocol) (Result, error)` | Single-protocol check |
+Receives callbacks during detection for metrics, tracing, or audit logging.
+Implementations **must** be safe for concurrent use when `Parallel` is true
+and **must** be non-blocking.
 
 ---
 
-## Error Types
-
-All error types implement `Unwrap()` for use with `errors.Is` / `errors.As`.
-
-### `DetectError`
+### ScanReport
 
 ```go
-type DetectError struct {
-    Protocol Protocol
-    Op       string  // "dial", "send", "receive"
-    Err      error
+type ScanReport struct {
+    Target     Target
+    StartedAt  time.Time
+    FinishedAt time.Time
+    Duration   time.Duration
+    Results    []Result
+    BestMatch  Result
 }
 ```
 
-Wraps an error during protocol detection. Provides structured fields for logging and metrics.
+Structured summary of a complete detection run returned by `Engine.Scan()`.
 
-### `TimeoutError`
+---
 
-```go
-type TimeoutError struct {
-    Protocol Protocol
-    Addr     string
-    Err      error
-}
-```
+### Errors
 
-Detection exceeded its deadline.
+| Type | Fields | Description |
+|------|--------|-------------|
+| `DetectError` | `Protocol`, `Op`, `Err` | Wraps an error during detection. `Unwrap()` supported. |
+| `TimeoutError` | `Protocol`, `Addr`, `Err` | Deadline exceeded. `Unwrap()` supported. |
+| `ConnectionError` | `Protocol`, `Addr`, `Err` | Transport failure (refused, unreachable). `Unwrap()` supported. |
+| `InvalidResponseError` | `Protocol`, `Reason` | Response received but malformed. |
+| `ProtocolNotFoundError` | `Protocol` | Requested protocol not in registry. |
 
-### `ConnectionError`
-
-```go
-type ConnectionError struct {
-    Protocol Protocol
-    Addr     string
-    Err      error
-}
-```
-
-Transport-level failure (refused, unreachable, etc.).
-
-### `ProtocolNotFoundError`
-
-```go
-type ProtocolNotFoundError struct {
-    Protocol Protocol
-}
-```
-
-Returned by `Engine.DetectProtocol` when the protocol is not registered.
-
-**Example — error classification:**
-
-```go
-result, err := engine.DetectProtocol(ctx, target, core.ProtocolModbus)
-if err != nil {
-    var pnf *core.ProtocolNotFoundError
-    if errors.As(err, &pnf) {
-        log.Fatalf("unknown protocol: %s", pnf.Protocol)
-    }
-    log.Fatalf("detection failed: %v", err)
-}
-
-if result.Error != nil {
-    var te *core.TimeoutError
-    var ce *core.ConnectionError
-    switch {
-    case errors.As(result.Error, &te):
-        log.Printf("timeout: %s", te.Addr)
-    case errors.As(result.Error, &ce):
-        log.Printf("connection failed: %s", ce.Addr)
-    default:
-        log.Printf("error: %v", result.Error)
-    }
-}
-```
+All error types implement the `error` interface. Use `errors.As()` for
+type-safe inspection.
 
 ---
 
 ## Protocol Packages
 
-Each protocol is in its own package under `protocols/`. All expose a single constructor:
+Each protocol lives in its own package under `protocols/`. Every package
+exports a single `New()` constructor returning `core.Fingerprinter`.
 
-```go
-func New() *Fingerprinter  // returns a ready-to-use fingerprinter
-```
+### Detection Order & Priorities
 
-| Package | Import Path | Protocol | Priority |
-|---|---|---|---|
-| `mms` | `github.com/boeboe/otfp/protocols/mms` | IEC 61850 MMS | 10 |
-| `s7` | `github.com/boeboe/otfp/protocols/s7` | Siemens S7comm | 20 |
-| `enip` | `github.com/boeboe/otfp/protocols/enip` | EtherNet/IP | 30 |
-| `iec104` | `github.com/boeboe/otfp/protocols/iec104` | IEC 60870-5-104 | 40 |
-| `dnp3` | `github.com/boeboe/otfp/protocols/dnp3` | DNP3 (TCP) | 50 |
-| `modbus` | `github.com/boeboe/otfp/protocols/modbus` | Modbus TCP | 60 |
-| `opcua` | `github.com/boeboe/otfp/protocols/opcua` | OPC UA | 70 |
-| `bacnet` | `github.com/boeboe/otfp/protocols/bacnet` | BACnet/IP | 80 |
-| `can` | `github.com/boeboe/otfp/protocols/can` | CAN (TCP Gateway) | 90 |
-| `profinet` | `github.com/boeboe/otfp/protocols/profinet` | PROFINET | 100 |
+| Priority | Package    | Protocol              | Default Port |
+|---------:|------------|-----------------------|-------------:|
+|       10 | `mms`      | IEC 61850 MMS         |          102 |
+|       20 | `s7`       | Siemens S7comm        |          102 |
+|       30 | `enip`     | EtherNet/IP (CIP)     |        44818 |
+|       40 | `iec104`   | IEC 60870-5-104       |         2404 |
+|       50 | `dnp3`     | DNP3 (TCP)            |        20000 |
+|       60 | `modbus`   | Modbus TCP            |          502 |
+|       70 | `opcua`    | OPC UA (Binary)       |         4840 |
+|       80 | `bacnet`   | BACnet/IP (BVLL)      |        47808 |
+|       90 | `can`      | CAN TCP Gateway       |         3000 |
+|      100 | `profinet` | PROFINET (Ethernet)   |        34964 |
 
-Shared ISO-on-TCP utilities (TPKT/COTP) live in `protocols/iso/`.
+### Protocol List
+
+Each detector sends a minimal, standards-compliant probe and analyses the
+response to determine protocol presence.
+
+| Package | Probe Strategy | Fingerprint ID |
+|---------|---------------|----------------|
+| `modbus` | FC 43 (Read Device ID) | `modbus.fc43` |
+| `mms` | ISO COTP CR → CC | `mms.cotp_cc` |
+| `s7` | COTP CR + S7 Setup Communication | `s7.setup_comm` |
+| `opcua` | OPC UA HEL → ACK | `opcua.hel_ack` |
+| `bacnet` | BVLC ReadBroadcastDistTable | `bacnet.bvll` |
+| `can` | SLCAN version command | `can.slcan` |
+| `profinet` | DCE/RPC Endpoint Mapper Bind | `profinet.dcerpc_bind` |
+| `dnp3` | DNP3 Link Status Request | `dnp3.link_status` |
+| `iec104` | STARTDT Act → STARTDT Con | `iec104.startdt` |
+| `enip` | EtherNet/IP RegisterSession | `enip.register_session` |
 
 ---
 
-## Usage Patterns
+## CLI — `otprobe`
 
-### Register a subset of protocols
-
-```go
-registry := core.NewRegistry()
-_ = registry.Register(modbus.New())
-_ = registry.Register(dnp3.New())
-_ = registry.Register(iec104.New())
+```
+otprobe --ip <address> --port <port> [options]
 ```
 
-### OT-safe scanning
+### Flags
 
-```go
-engine := core.NewEngine(registry, core.SafeEngineConfig())
+| Flag | Type | Default | Description |
+|------|------|---------|-------------|
+| `--ip` | string | *(required)* | Target IP address. |
+| `--port` | int | *(required)* | Target TCP port. |
+| `--check` | string | | Check specific protocol only. |
+| `--timeout` | duration | `5s` | Per-protocol connection timeout. |
+| `--global-timeout` | duration | `0` | Overall timeout (0 = unlimited). |
+| `--verbose` | bool | `false` | Show detailed detection info. |
+| `--parallel` | bool | `true` | Run protocol checks in parallel. |
+| `--safe` | bool | `false` | OT-safe mode: sequential, low concurrency. |
+| `--output` | string | `text` | Output format: `text` or `json`. |
+| `--version` | bool | `false` | Print version and exit. |
+| `--list` | bool | `false` | List supported protocols and exit. |
+
+### Exit Codes
+
+| Code | Meaning |
+|-----:|---------|
+| `0` | Protocol detected (high confidence ≥ 0.9). |
+| `1` | Unknown protocol (no match). |
+| `2` | Connection error. |
+| `3` | Invalid parameters. |
+| `4` | Partial detection (matched but confidence < 0.9). |
+
+### JSON Output
+
+When `--output json` is used, the output is a single JSON object:
+
+```json
+{
+  "target": "192.168.1.100:502",
+  "protocol": "Modbus TCP",
+  "matched": true,
+  "confidence": 0.95,
+  "details": "Valid Modbus response with matching transaction ID",
+  "fingerprint": {
+    "id": "modbus.fc43",
+    "signature": "Valid Modbus response with matching transaction ID"
+  },
+  "detection_id": "a1b2c3d4e5f67890",
+  "timestamp": "2025-01-15T10:30:00.123456789Z"
+}
 ```
 
-Sequential detection with `MaxConcurrency=1` — minimal network impact.
+Fields `details`, `error`, and `fingerprint` are omitted when empty/nil.
 
-### Parallel with bounded concurrency
+---
+
+## Usage Examples
+
+### Library — Basic Detection
 
 ```go
-config := core.DefaultEngineConfig()
-config.MaxConcurrency = 4
-engine := core.NewEngine(registry, config)
+package main
+
+import (
+    "context"
+    "fmt"
+
+    "github.com/boeboe/otfp/core"
+    "github.com/boeboe/otfp/protocols/modbus"
+    "github.com/boeboe/otfp/protocols/s7"
+)
+
+func main() {
+    reg := core.NewRegistry()
+    _ = reg.Register(modbus.New())
+    _ = reg.Register(s7.New())
+
+    engine := core.NewEngine(reg, core.DefaultEngineConfig())
+    target := core.Target{IP: "192.168.1.100", Port: 502}
+
+    result := engine.Detect(context.Background(), target)
+    fmt.Println(result)
+}
 ```
 
-### Global timeout via context
+### Library — ScanReport with Observer
 
 ```go
-ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-defer cancel()
+type logger struct{}
 
-result := engine.Detect(ctx, target)
-```
-
-### Check a single protocol
-
-```go
-result, err := engine.DetectProtocol(ctx, target, core.ProtocolS7)
-```
-
-### Iterate all results
-
-```go
-for _, r := range engine.DetectAll(ctx, target) {
-    fmt.Printf("%-20s matched=%-5v confidence=%.2f\n",
+func (l *logger) OnStart(p core.Protocol, t core.Target) {
+    fmt.Printf("  probing %s on %s\n", p, t.Addr())
+}
+func (l *logger) OnResult(r core.Result) {
+    fmt.Printf("  result: %s matched=%v confidence=%.2f\n",
         r.Protocol, r.Matched, r.Confidence)
 }
+
+func scan() {
+    reg := core.NewRegistry()
+    // ... register protocols ...
+
+    config := core.DefaultEngineConfig()
+    config.Observer = &logger{}
+    config.MinInterval = 100 * time.Millisecond
+
+    engine := core.NewEngine(reg, config)
+    report := engine.Scan(context.Background(),
+        core.Target{IP: "10.0.0.1", Port: 502})
+
+    fmt.Printf("Scan took %v, best: %s (%.2f)\n",
+        report.Duration, report.BestMatch.Protocol,
+        report.BestMatch.Confidence)
+}
 ```
 
-### Implement a custom fingerprinter
+### Library — OT-Safe Mode
 
 ```go
-type MyFingerprinter struct{}
-
-func (f *MyFingerprinter) Name() core.Protocol     { return "My Protocol" }
-func (f *MyFingerprinter) Priority() int            { return 200 }
-func (f *MyFingerprinter) Detect(ctx context.Context, target core.Target) (core.Result, error) {
-    // Your detection logic
-    return core.Match("My Protocol", 0.85, "custom probe matched"), nil
-}
-
-registry.Register(&MyFingerprinter{})
+config := core.SafeEngineConfig()
+config.MinInterval = 200 * time.Millisecond
+engine := core.NewEngine(reg, config)
 ```
 
----
+### CLI — Quick Examples
 
-## Detection Order
+```bash
+# Auto-detect protocol
+otprobe --ip 192.168.1.100 --port 502
 
-The engine tests fingerprinters in **priority order** (lowest priority number first).
-The built-in order is:
+# Check specific protocol
+otprobe --ip 192.168.1.100 --port 502 --check modbus
 
-1. IEC 61850 MMS (10)
-2. Siemens S7comm (20)
-3. EtherNet/IP (30)
-4. IEC 60870-5-104 (40)
-5. DNP3 (50)
-6. Modbus TCP (60)
-7. OPC UA (70)
-8. BACnet/IP (80)
-9. CAN TCP Gateway (90)
-10. PROFINET (100)
+# JSON output
+otprobe --ip 192.168.1.100 --port 502 --output json
 
-ISO-based protocols (MMS, S7) are tested first because their TPKT/COTP
-framing provides highly distinctive signatures. Lighter-weight and
-niche gateway probes run last.
+# OT-safe mode with global timeout
+otprobe --ip 10.0.0.1 --port 102 --safe --global-timeout 30s
 
-With `EarlyStop=true` (default), detection stops as soon as a match
-reaches the `HighConfidenceThreshold` (default 0.9).
+# List supported protocols
+otprobe --list
+
+# Use exit code in scripts
+otprobe --ip 10.0.0.1 --port 502 --output json
+case $? in
+  0) echo "Detected with high confidence" ;;
+  1) echo "No protocol detected" ;;
+  4) echo "Low-confidence detection" ;;
+esac
+```

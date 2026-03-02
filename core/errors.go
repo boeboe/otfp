@@ -41,3 +41,15 @@ func (e *ConnectionError) Error() string {
 }
 
 func (e *ConnectionError) Unwrap() error { return e.Err }
+
+// InvalidResponseError indicates the target responded, but the response
+// was malformed or did not conform to the expected protocol framing.
+// Useful for distinguishing "wrong protocol" from "broken implementation".
+type InvalidResponseError struct {
+	Protocol Protocol
+	Reason   string
+}
+
+func (e *InvalidResponseError) Error() string {
+	return fmt.Sprintf("%s invalid response: %s", e.Protocol, e.Reason)
+}

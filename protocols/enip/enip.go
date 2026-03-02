@@ -98,7 +98,7 @@ func validateResponse(resp []byte) core.Result {
 		return core.NoMatch(protocolName)
 	}
 
-	confidence := 0.0
+	var confidence core.Confidence
 	details := ""
 
 	// Check 1: Command field.
@@ -157,5 +157,10 @@ func validateResponse(resp []byte) core.Result {
 		return core.NoMatch(protocolName)
 	}
 
-	return core.Match(protocolName, confidence, details)
+	result := core.Match(protocolName, confidence, details)
+	result.Fingerprint = &core.Fingerprint{
+		ID:        "enip.register_session",
+		Signature: details,
+	}
+	return result
 }

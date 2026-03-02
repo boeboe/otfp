@@ -4,7 +4,18 @@ import (
 	"context"
 	"sort"
 	"sync"
+	"time"
 )
+
+// Observer receives callbacks during protocol detection for instrumentation.
+// Implementations must be safe for concurrent use when Parallel is true.
+// All methods must be non-blocking.
+type Observer interface {
+	// OnStart is called before each protocol detection attempt begins.
+	OnStart(protocol Protocol, target Target)
+	// OnResult is called after each detection attempt completes.
+	OnResult(result Result)
+}
 
 // EngineConfig configures the detection engine behavior.
 type EngineConfig struct {
@@ -18,11 +29,21 @@ type EngineConfig struct {
 
 	// HighConfidenceThreshold is the minimum confidence to trigger early stop.
 	// Default: 0.9
-	HighConfidenceThreshold float64
+	HighConfidenceThreshold Confidence
 
 	// MaxConcurrency limits the number of in-flight goroutines when Parallel
 	// is true. Zero or negative means unbounded.
 	MaxConcurrency int
+
+	// MinInterval enforces a minimum delay between sequential protocol
+	// attempts (or between goroutine launches in parallel mode).
+	// In ICS environments, burst scanning may trigger IDS alerts.
+	// Zero means no delay.
+	MinInterval time.Duration
+
+	// Observer receives callbacks during detection for metrics, tracing,
+	// or audit logging. Nil disables observation.
+	Observer Observer
 }
 
 // DefaultEngineConfig returns sensible default engine configuration.
@@ -63,6 +84,59 @@ func NewEngine(registry *Registry, config EngineConfig) *Engine {
 	}
 }
 
+// ScanReport is a structured summary of a complete detection run.
+type ScanReport struct {
+	// Target is the endpoint that was scanned.
+	Target Target
+
+	// StartedAt records when the scan began.
+	StartedAt time.Time
+
+	// FinishedAt records when the scan completed.
+	FinishedAt time.Time
+
+	// Duration is the wall-clock time of the scan.
+	Duration time.Duration
+
+	// Results holds all individual detection outcomes, sorted by
+	// confidence descending.
+	Results []Result
+
+	// BestMatch is the highest-confidence matched result, or a
+	// ProtocolUnknown result if nothing matched.
+	BestMatch Result
+}
+
+// Scan runs a full detection sweep and returns a structured ScanReport.
+func (e *Engine) Scan(ctx context.Context, target Target) ScanReport {
+	start := time.Now()
+	results := e.DetectAll(ctx, target)
+	end := time.Now()
+
+	best := Result{
+		Protocol:    ProtocolUnknown,
+		Matched:     false,
+		Confidence:  0.0,
+		Details:     "No OT protocol detected",
+		DetectionID: generateDetectionID(),
+		Timestamp:   time.Now(),
+	}
+	for _, r := range results {
+		if r.Matched && r.Confidence > best.Confidence {
+			best = r
+		}
+	}
+
+	return ScanReport{
+		Target:     target,
+		StartedAt:  start,
+		FinishedAt: end,
+		Duration:   end.Sub(start),
+		Results:    results,
+		BestMatch:  best,
+	}
+}
+
 // DetectAll runs all registered fingerprinters against the target and returns
 // all results sorted by confidence (highest first).
 func (e *Engine) DetectAll(ctx context.Context, target Target) []Result {
@@ -92,10 +166,12 @@ func (e *Engine) Detect(ctx context.Context, target Target) Result {
 
 	if len(matched) == 0 {
 		return Result{
-			Protocol:   ProtocolUnknown,
-			Matched:    false,
-			Confidence: 0.0,
-			Details:    "No OT protocol detected",
+			Protocol:    ProtocolUnknown,
+			Matched:     false,
+			Confidence:  0.0,
+			Details:     "No OT protocol detected",
+			DetectionID: generateDetectionID(),
+			Timestamp:   time.Now(),
 		}
 	}
 
@@ -118,23 +194,39 @@ type ProtocolNotFoundError struct {
 }
 
 func (e *ProtocolNotFoundError) Error() string {
-	return "protocol not registered: " + string(e.Protocol)
+	return "protocol not registered: " + e.Protocol.String()
 }
 
 func (e *Engine) detectSequential(ctx context.Context, target Target, fps []Fingerprinter) []Result {
 	var results []Result
 
-	for _, fp := range fps {
+	for i, fp := range fps {
 		select {
 		case <-ctx.Done():
 			return results
 		default:
 		}
 
+		// Enforce inter-probe delay.
+		if e.config.MinInterval > 0 && i > 0 {
+			select {
+			case <-ctx.Done():
+				return results
+			case <-time.After(e.config.MinInterval):
+			}
+		}
+
+		if e.config.Observer != nil {
+			e.config.Observer.OnStart(fp.Name(), target)
+		}
+
 		result, err := fp.Detect(ctx, target)
 		if err != nil {
-			results = append(results, ErrorResult(fp.Name(), err))
-			continue
+			result = ErrorResult(fp.Name(), err)
+		}
+
+		if e.config.Observer != nil {
+			e.config.Observer.OnResult(result)
 		}
 
 		results = append(results, result)
@@ -167,6 +259,15 @@ func (e *Engine) detectParallel(ctx context.Context, target Target, fps []Finger
 	}
 
 	for i, fp := range fps {
+		// Stagger goroutine launches when MinInterval is set.
+		if e.config.MinInterval > 0 && i > 0 {
+			select {
+			case <-ctx.Done():
+				break
+			case <-time.After(e.config.MinInterval):
+			}
+		}
+
 		wg.Add(1)
 		go func(idx int, fp Fingerprinter) {
 			defer wg.Done()
@@ -182,11 +283,19 @@ func (e *Engine) detectParallel(ctx context.Context, target Target, fps []Finger
 				}
 			}
 
+			if e.config.Observer != nil {
+				e.config.Observer.OnStart(fp.Name(), target)
+			}
+
 			result, err := fp.Detect(ctx, target)
 			if err != nil {
-				ch <- indexedResult{result: ErrorResult(fp.Name(), err), index: idx}
-				return
+				result = ErrorResult(fp.Name(), err)
 			}
+
+			if e.config.Observer != nil {
+				e.config.Observer.OnResult(result)
+			}
+
 			ch <- indexedResult{result: result, index: idx}
 
 			// Signal early stop if high confidence match.

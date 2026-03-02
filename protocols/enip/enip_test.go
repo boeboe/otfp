@@ -230,8 +230,8 @@ func TestENIPDetectPartialResponse(t *testing.T) {
 
 func TestENIPName(t *testing.T) {
 	fp := New()
-	if fp.Name() != "EtherNet/IP" {
-		t.Errorf("Name() = %q, want %q", fp.Name(), "EtherNet/IP")
+	if fp.Name() != core.ProtocolENIP {
+		t.Errorf("Name() = %s, want %s", fp.Name(), core.ProtocolENIP)
 	}
 }
 

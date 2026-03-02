@@ -1,38 +1,73 @@
 package core
 
-// Protocol represents a named OT protocol identifier.
-// It is a string-based type for readability and serialisation while
-// providing compile-time safety through typed constants.
-type Protocol string
+import "fmt"
+
+// Protocol represents a named OT protocol identifier as an efficient
+// integer type. String representations are maintained via a lookup table.
+// Protocol values are stable across versions and must not be reordered.
+type Protocol uint8
 
 // Known protocol identifiers.
 const (
-	ProtocolUnknown  Protocol = "Unknown"
-	ProtocolModbus   Protocol = "Modbus TCP"
-	ProtocolMMS      Protocol = "IEC 61850 MMS"
-	ProtocolS7       Protocol = "Siemens S7comm"
-	ProtocolOPCUA    Protocol = "OPC UA"
-	ProtocolBACnet   Protocol = "BACnet/IP"
-	ProtocolCAN      Protocol = "CAN (TCP Gateway)"
-	ProtocolPROFINET Protocol = "PROFINET (Ethernet)"
-	ProtocolDNP3     Protocol = "DNP3 (TCP)"
-	ProtocolIEC104   Protocol = "IEC 60870-5-104"
-	ProtocolENIP     Protocol = "EtherNet/IP"
+	ProtocolUnknown  Protocol = 0
+	ProtocolModbus   Protocol = 1
+	ProtocolMMS      Protocol = 2
+	ProtocolS7       Protocol = 3
+	ProtocolOPCUA    Protocol = 4
+	ProtocolBACnet   Protocol = 5
+	ProtocolCAN      Protocol = 6
+	ProtocolPROFINET Protocol = 7
+	ProtocolDNP3     Protocol = 8
+	ProtocolIEC104   Protocol = 9
+	ProtocolENIP     Protocol = 10
+	protocolCount    Protocol = 11 // unexported sentinel
 )
 
-// String returns the protocol name as a plain string.
-func (p Protocol) String() string { return string(p) }
+// protocolNames maps Protocol values to human-readable names.
+var protocolNames = [protocolCount]string{
+	ProtocolUnknown:  "Unknown",
+	ProtocolModbus:   "Modbus TCP",
+	ProtocolMMS:      "IEC 61850 MMS",
+	ProtocolS7:       "Siemens S7comm",
+	ProtocolOPCUA:    "OPC UA",
+	ProtocolBACnet:   "BACnet/IP",
+	ProtocolCAN:      "CAN (TCP Gateway)",
+	ProtocolPROFINET: "PROFINET (Ethernet)",
+	ProtocolDNP3:     "DNP3 (TCP)",
+	ProtocolIEC104:   "IEC 60870-5-104",
+	ProtocolENIP:     "EtherNet/IP",
+}
+
+// protocolsByName provides reverse lookup from name string to Protocol.
+var protocolsByName map[string]Protocol
+
+func init() {
+	protocolsByName = make(map[string]Protocol, int(protocolCount))
+	for i := Protocol(0); i < protocolCount; i++ {
+		protocolsByName[protocolNames[i]] = i
+	}
+}
+
+// String returns the human-readable protocol name.
+func (p Protocol) String() string {
+	if p < protocolCount {
+		return protocolNames[p]
+	}
+	return "Unknown"
+}
 
 // IsValid reports whether p is a known, non-Unknown protocol.
 func (p Protocol) IsValid() bool {
-	switch p {
-	case ProtocolModbus, ProtocolMMS, ProtocolS7, ProtocolOPCUA,
-		ProtocolBACnet, ProtocolCAN, ProtocolPROFINET, ProtocolDNP3,
-		ProtocolIEC104, ProtocolENIP:
-		return true
-	default:
-		return false
+	return p > ProtocolUnknown && p < protocolCount
+}
+
+// ParseProtocol converts a protocol name string to its typed constant.
+// Returns an error if the name does not match any known protocol.
+func ParseProtocol(s string) (Protocol, error) {
+	if p, ok := protocolsByName[s]; ok && p != ProtocolUnknown {
+		return p, nil
 	}
+	return ProtocolUnknown, fmt.Errorf("unknown protocol: %q", s)
 }
 
 // AllProtocols returns every known protocol in recommended detection order.

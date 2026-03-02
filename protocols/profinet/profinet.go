@@ -151,7 +151,7 @@ func validateResponse(resp []byte) core.Result {
 		return core.NoMatch(protocolName)
 	}
 
-	confidence := 0.0
+	var confidence core.Confidence
 	details := ""
 
 	// Check 1: DCE/RPC header validation.
@@ -216,5 +216,10 @@ func validateResponse(resp []byte) core.Result {
 		return core.NoMatch(protocolName)
 	}
 
-	return core.Match(protocolName, confidence, details)
+	result := core.Match(protocolName, confidence, details)
+	result.Fingerprint = &core.Fingerprint{
+		ID:        "profinet.dcerpc_bind",
+		Signature: details,
+	}
+	return result
 }

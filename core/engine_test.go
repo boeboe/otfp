@@ -3,6 +3,7 @@ package core
 import (
 	"context"
 	"fmt"
+	"sync"
 	"testing"
 	"time"
 )
@@ -10,21 +11,21 @@ import (
 func TestEngineDetectBestMatch(t *testing.T) {
 	reg := NewRegistry()
 	_ = reg.Register(&mockFingerprinter{
-		name:     "Low",
+		name:     ProtocolMMS,
 		priority: 10,
-		result:   Match("Low", 0.3, "low match"),
+		result:   Match(ProtocolMMS, 0.3, "low match"),
 	})
 	_ = reg.Register(&mockFingerprinter{
-		name:     "High",
+		name:     ProtocolModbus,
 		priority: 20,
-		result:   Match("High", 0.95, "high match"),
+		result:   Match(ProtocolModbus, 0.95, "high match"),
 	})
 
 	engine := NewEngine(reg, DefaultEngineConfig())
 	result := engine.Detect(context.Background(), Target{IP: "127.0.0.1", Port: 1234})
 
-	if result.Protocol != "High" {
-		t.Errorf("Detect() returned %q, want High", result.Protocol)
+	if result.Protocol != ProtocolModbus {
+		t.Errorf("Detect() returned %s, want %s", result.Protocol, ProtocolModbus)
 	}
 	if result.Confidence != 0.95 {
 		t.Errorf("Confidence = %f, want 0.95", result.Confidence)
@@ -34,15 +35,15 @@ func TestEngineDetectBestMatch(t *testing.T) {
 func TestEngineDetectUnknown(t *testing.T) {
 	reg := NewRegistry()
 	_ = reg.Register(&mockFingerprinter{
-		name:   "Fail",
-		result: NoMatch("Fail"),
+		name:   ProtocolMMS,
+		result: NoMatch(ProtocolMMS),
 	})
 
 	engine := NewEngine(reg, DefaultEngineConfig())
 	result := engine.Detect(context.Background(), Target{IP: "127.0.0.1", Port: 1234})
 
 	if result.Protocol != ProtocolUnknown {
-		t.Errorf("Detect() returned %q, want %q", result.Protocol, ProtocolUnknown)
+		t.Errorf("Detect() returned %s, want %s", result.Protocol, ProtocolUnknown)
 	}
 	if result.Matched {
 		t.Error("Expected Matched=false")
@@ -52,14 +53,14 @@ func TestEngineDetectUnknown(t *testing.T) {
 func TestEngineDetectProtocol(t *testing.T) {
 	reg := NewRegistry()
 	_ = reg.Register(&mockFingerprinter{
-		name:   "TestProto",
-		result: Match("TestProto", 0.9, "ok"),
+		name:   ProtocolModbus,
+		result: Match(ProtocolModbus, 0.9, "ok"),
 	})
 
 	engine := NewEngine(reg, DefaultEngineConfig())
 
 	t.Run("existing protocol", func(t *testing.T) {
-		result, err := engine.DetectProtocol(context.Background(), Target{IP: "127.0.0.1", Port: 80}, "TestProto")
+		result, err := engine.DetectProtocol(context.Background(), Target{IP: "127.0.0.1", Port: 80}, ProtocolModbus)
 		if err != nil {
 			t.Fatalf("DetectProtocol error: %v", err)
 		}
@@ -69,7 +70,7 @@ func TestEngineDetectProtocol(t *testing.T) {
 	})
 
 	t.Run("missing protocol", func(t *testing.T) {
-		_, err := engine.DetectProtocol(context.Background(), Target{IP: "127.0.0.1", Port: 80}, "NoSuch")
+		_, err := engine.DetectProtocol(context.Background(), Target{IP: "127.0.0.1", Port: 80}, ProtocolS7)
 		if err == nil {
 			t.Error("Expected error for missing protocol")
 		}
@@ -79,14 +80,14 @@ func TestEngineDetectProtocol(t *testing.T) {
 func TestEngineSequential(t *testing.T) {
 	reg := NewRegistry()
 	_ = reg.Register(&mockFingerprinter{
-		name:     "A",
+		name:     ProtocolMMS,
 		priority: 10,
-		result:   Match("A", 0.5, "partial"),
+		result:   Match(ProtocolMMS, 0.5, "partial"),
 	})
 	_ = reg.Register(&mockFingerprinter{
-		name:     "B",
+		name:     ProtocolS7,
 		priority: 20,
-		result:   Match("B", 0.8, "good"),
+		result:   Match(ProtocolS7, 0.8, "good"),
 	})
 
 	config := EngineConfig{
@@ -109,14 +110,14 @@ func TestEngineSequential(t *testing.T) {
 func TestEngineEarlyStop(t *testing.T) {
 	reg := NewRegistry()
 	_ = reg.Register(&mockFingerprinter{
-		name:     "High",
+		name:     ProtocolMMS,
 		priority: 10,
-		result:   Match("High", 0.95, "early"),
+		result:   Match(ProtocolMMS, 0.95, "early"),
 	})
 	_ = reg.Register(&mockFingerprinter{
-		name:     "Never",
+		name:     ProtocolModbus,
 		priority: 20,
-		result:   NoMatch("Never"),
+		result:   NoMatch(ProtocolModbus),
 	})
 
 	config := EngineConfig{
@@ -136,7 +137,7 @@ func TestEngineEarlyStop(t *testing.T) {
 func TestEngineWithErrors(t *testing.T) {
 	reg := NewRegistry()
 	_ = reg.Register(&mockFingerprinter{
-		name: "Error",
+		name: ProtocolModbus,
 		err:  fmt.Errorf("connection failed"),
 	})
 
@@ -144,15 +145,15 @@ func TestEngineWithErrors(t *testing.T) {
 	result := engine.Detect(context.Background(), Target{IP: "127.0.0.1", Port: 1234})
 
 	if result.Protocol != ProtocolUnknown {
-		t.Errorf("Expected %q, got %q", ProtocolUnknown, result.Protocol)
+		t.Errorf("Expected %s, got %s", ProtocolUnknown, result.Protocol)
 	}
 }
 
 func TestEngineContextCancellation(t *testing.T) {
 	reg := NewRegistry()
 	_ = reg.Register(&mockFingerprinter{
-		name:   "Slow",
-		result: NoMatch("Slow"),
+		name:   ProtocolModbus,
+		result: NoMatch(ProtocolModbus),
 	})
 
 	config := EngineConfig{Parallel: false}
@@ -173,7 +174,7 @@ func TestEngineEmptyRegistry(t *testing.T) {
 	result := engine.Detect(context.Background(), Target{IP: "127.0.0.1", Port: 1234})
 
 	if result.Protocol != ProtocolUnknown {
-		t.Errorf("Expected %q, got %q", ProtocolUnknown, result.Protocol)
+		t.Errorf("Expected %s, got %s", ProtocolUnknown, result.Protocol)
 	}
 }
 
@@ -190,14 +191,14 @@ func TestEngineSafeConfig(t *testing.T) {
 func TestEngineMaxConcurrency(t *testing.T) {
 	reg := NewRegistry()
 	_ = reg.Register(&mockFingerprinter{
-		name:     "P1",
+		name:     ProtocolMMS,
 		priority: 10,
-		result:   NoMatch("P1"),
+		result:   NoMatch(ProtocolMMS),
 	})
 	_ = reg.Register(&mockFingerprinter{
-		name:     "P2",
+		name:     ProtocolS7,
 		priority: 20,
-		result:   Match("P2", 0.8, "ok"),
+		result:   Match(ProtocolS7, 0.8, "ok"),
 	})
 
 	config := EngineConfig{
@@ -212,4 +213,110 @@ func TestEngineMaxConcurrency(t *testing.T) {
 	if len(results) != 2 {
 		t.Fatalf("Expected 2 results with bounded concurrency, got %d", len(results))
 	}
+}
+
+func TestEngineScan(t *testing.T) {
+	reg := NewRegistry()
+	_ = reg.Register(&mockFingerprinter{
+		name:     ProtocolModbus,
+		priority: 10,
+		result:   Match(ProtocolModbus, 0.95, "good"),
+	})
+
+	engine := NewEngine(reg, DefaultEngineConfig())
+	report := engine.Scan(context.Background(), Target{IP: "127.0.0.1", Port: 502})
+
+	if report.Target.Port != 502 {
+		t.Errorf("report.Target.Port = %d, want 502", report.Target.Port)
+	}
+	if report.StartedAt.IsZero() {
+		t.Error("StartedAt should be set")
+	}
+	if report.Duration < 0 {
+		t.Error("Duration should be non-negative")
+	}
+	if !report.BestMatch.Matched {
+		t.Error("BestMatch should be matched")
+	}
+	if report.BestMatch.Protocol != ProtocolModbus {
+		t.Errorf("BestMatch.Protocol = %s, want %s", report.BestMatch.Protocol, ProtocolModbus)
+	}
+}
+
+func TestEngineObserver(t *testing.T) {
+	reg := NewRegistry()
+	_ = reg.Register(&mockFingerprinter{
+		name:   ProtocolModbus,
+		result: Match(ProtocolModbus, 0.9, "ok"),
+	})
+
+	obs := &testObserver{}
+	config := DefaultEngineConfig()
+	config.Observer = obs
+	config.Parallel = false
+
+	engine := NewEngine(reg, config)
+	_ = engine.Detect(context.Background(), Target{IP: "127.0.0.1", Port: 502})
+
+	obs.mu.Lock()
+	defer obs.mu.Unlock()
+	if obs.starts != 1 {
+		t.Errorf("Observer.OnStart called %d times, want 1", obs.starts)
+	}
+	if obs.results != 1 {
+		t.Errorf("Observer.OnResult called %d times, want 1", obs.results)
+	}
+}
+
+func TestEngineMinInterval(t *testing.T) {
+	reg := NewRegistry()
+	_ = reg.Register(&mockFingerprinter{
+		name:     ProtocolMMS,
+		priority: 10,
+		result:   NoMatch(ProtocolMMS),
+	})
+	_ = reg.Register(&mockFingerprinter{
+		name:     ProtocolModbus,
+		priority: 20,
+		result:   NoMatch(ProtocolModbus),
+	})
+
+	config := EngineConfig{
+		Parallel:                false,
+		EarlyStop:               false,
+		HighConfidenceThreshold: 0.9,
+		MinInterval:             10 * time.Millisecond,
+	}
+	engine := NewEngine(reg, config)
+
+	start := time.Now()
+	results := engine.DetectAll(context.Background(), Target{IP: "127.0.0.1", Port: 1234})
+	elapsed := time.Since(start)
+
+	if len(results) != 2 {
+		t.Fatalf("Expected 2 results, got %d", len(results))
+	}
+	// With 2 probes and 10ms min interval, should take at least 10ms.
+	if elapsed < 10*time.Millisecond {
+		t.Errorf("MinInterval not enforced: elapsed %v", elapsed)
+	}
+}
+
+// testObserver is a thread-safe Observer for testing.
+type testObserver struct {
+	mu      sync.Mutex
+	starts  int
+	results int
+}
+
+func (o *testObserver) OnStart(_ Protocol, _ Target) {
+	o.mu.Lock()
+	o.starts++
+	o.mu.Unlock()
+}
+
+func (o *testObserver) OnResult(_ Result) {
+	o.mu.Lock()
+	o.results++
+	o.mu.Unlock()
 }

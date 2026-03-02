@@ -142,7 +142,7 @@ func TestMMSDetectConnectionRefused(t *testing.T) {
 
 func TestMMSName(t *testing.T) {
 	fp := New()
-	if fp.Name() != "IEC 61850 MMS" {
-		t.Errorf("Name() = %q, want %q", fp.Name(), "IEC 61850 MMS")
+	if fp.Name() != core.ProtocolMMS {
+		t.Errorf("Name() = %s, want %s", fp.Name(), core.ProtocolMMS)
 	}
 }

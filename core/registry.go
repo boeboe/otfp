@@ -29,7 +29,7 @@ func (r *Registry) Register(fp Fingerprinter) error {
 
 	name := fp.Name()
 	if _, exists := r.byName[name]; exists {
-		return fmt.Errorf("fingerprinter %q already registered", name)
+		return fmt.Errorf("fingerprinter %q already registered", name.String())
 	}
 
 	r.fingerprints = append(r.fingerprints, fp)

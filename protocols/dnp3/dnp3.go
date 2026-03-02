@@ -98,7 +98,7 @@ func validateResponse(resp []byte) core.Result {
 		return core.NoMatch(protocolName)
 	}
 
-	confidence := 0.0
+	var confidence core.Confidence
 	details := ""
 
 	// Check 1: Start bytes.
@@ -151,7 +151,12 @@ func validateResponse(resp []byte) core.Result {
 		return core.NoMatch(protocolName)
 	}
 
-	return core.Match(protocolName, confidence, details)
+	result := core.Match(protocolName, confidence, details)
+	result.Fingerprint = &core.Fingerprint{
+		ID:        "dnp3.link_status",
+		Signature: details,
+	}
+	return result
 }
 
 // crc16DNP computes the DNP3 CRC-16 over the given data.

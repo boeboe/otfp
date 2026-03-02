@@ -40,6 +40,7 @@ const (
 	exitUnknown   = 1
 	exitConnError = 2
 	exitBadParams = 3
+	exitPartial   = 4 // matched but below high-confidence threshold
 )
 
 // protocolAliases maps short CLI names to typed Protocol identifiers.
@@ -76,6 +77,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 	safe := fs.Bool("safe", false, "OT-safe mode: sequential, low concurrency, conservative timeouts")
 	output := fs.String("output", "text", "Output format: text or json")
 	showVersion := fs.Bool("version", false, "Print version information and exit")
+	listProtos := fs.Bool("list", false, "List supported protocols and exit")
 
 	fs.Usage = func() {
 		_, _ = fmt.Fprintf(stderr, "Usage: otprobe --ip <address> --port <port> [options]\n\n")
@@ -98,6 +100,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 		_, _ = fmt.Fprintf(stderr, "  1  Unknown protocol\n")
 		_, _ = fmt.Fprintf(stderr, "  2  Connection error\n")
 		_, _ = fmt.Fprintf(stderr, "  3  Invalid parameters\n")
+		_, _ = fmt.Fprintf(stderr, "  4  Partial detection (low confidence)\n")
 	}
 
 	if err := fs.Parse(args); err != nil {
@@ -118,6 +121,16 @@ func run(args []string, stdout, stderr io.Writer) int {
 		return exitDetected
 	}
 
+	// ---- list protocols ----
+	if *listProtos {
+		reg := defaultRegistry()
+		for _, fp := range reg.All() {
+			_, _ = fmt.Fprintf(stdout, "  %-12s %s (priority %d)\n",
+				aliasForProtocol(fp.Name()), fp.Name(), fp.Priority())
+		}
+		return exitDetected
+	}
+
 	// ---- structured logger ----
 	logger := initLogger(stderr, *verbose)
 
@@ -129,8 +142,13 @@ func run(args []string, stdout, stderr io.Writer) int {
 		fs.Usage()
 		return exitBadParams
 	}
-	if *port <= 0 || *port > 65535 {
-		logger.Error("--port must be between 1 and 65535", "port", *port)
+	target := core.Target{
+		IP:      *ip,
+		Port:    *port,
+		Timeout: *timeout,
+	}
+	if err := target.Validate(); err != nil {
+		logger.Error("invalid target", "error", err)
 		fs.Usage()
 		return exitBadParams
 	}
@@ -155,13 +173,6 @@ func run(args []string, stdout, stderr io.Writer) int {
 
 	// ---- build registry ----
 	registry := defaultRegistry()
-
-	// ---- build target ----
-	target := core.Target{
-		IP:      *ip,
-		Port:    *port,
-		Timeout: *timeout,
-	}
 
 	// ---- build engine config ----
 	config := core.EngineConfig{
@@ -232,7 +243,7 @@ func runSpecificCheck(ctx context.Context, logger *slog.Logger, engine *core.Eng
 		_, _ = fmt.Fprintf(w, "%s: true\n", capitalizeFirst(lower))
 		_, _ = fmt.Fprintf(w, "Confidence: %.2f\n", result.Confidence)
 		_, _ = fmt.Fprintf(w, "Details: %s\n", result.Details)
-		return exitDetected
+		return exitCodeForResult(result)
 	}
 	_, _ = fmt.Fprintf(w, "%s: false\n", capitalizeFirst(lower))
 	return exitUnknown
@@ -276,26 +287,32 @@ func runFullDetection(ctx context.Context, logger *slog.Logger, engine *core.Eng
 		}
 	}
 
-	return exitDetected
+	return exitCodeForResult(result)
 }
 
 // jsonOutput is the machine-readable result envelope.
 type jsonOutput struct {
-	Target     string  `json:"target"`
-	Protocol   string  `json:"protocol"`
-	Matched    bool    `json:"matched"`
-	Confidence float64 `json:"confidence"`
-	Details    string  `json:"details,omitempty"`
-	Error      string  `json:"error,omitempty"`
+	Target      string            `json:"target"`
+	Protocol    string            `json:"protocol"`
+	Matched     bool              `json:"matched"`
+	Confidence  float64           `json:"confidence"`
+	Details     string            `json:"details,omitempty"`
+	Error       string            `json:"error,omitempty"`
+	Fingerprint *core.Fingerprint `json:"fingerprint,omitempty"`
+	DetectionID string            `json:"detection_id"`
+	Timestamp   string            `json:"timestamp"`
 }
 
 func writeJSON(w io.Writer, target core.Target, r core.Result) int {
 	out := jsonOutput{
-		Target:     target.Addr(),
-		Protocol:   r.Protocol.String(),
-		Matched:    r.Matched,
-		Confidence: r.Confidence,
-		Details:    r.Details,
+		Target:      target.Addr(),
+		Protocol:    r.Protocol.String(),
+		Matched:     r.Matched,
+		Confidence:  float64(r.Confidence),
+		Details:     r.Details,
+		Fingerprint: r.Fingerprint,
+		DetectionID: r.DetectionID,
+		Timestamp:   r.Timestamp.Format(time.RFC3339Nano),
 	}
 	if r.Error != nil {
 		out.Error = r.Error.Error()
@@ -305,10 +322,7 @@ func writeJSON(w io.Writer, target core.Target, r core.Result) int {
 	enc.SetIndent("", "  ")
 	_ = enc.Encode(out) //nolint:errcheck
 
-	if r.Matched {
-		return exitDetected
-	}
-	return exitUnknown
+	return exitCodeForResult(r)
 }
 
 func initLogger(w io.Writer, verbose bool) *slog.Logger {
@@ -326,4 +340,25 @@ func capitalizeFirst(s string) string {
 		return s
 	}
 	return strings.ToUpper(s[:1]) + s[1:]
+}
+
+// exitCodeForResult returns the appropriate exit code based on result.
+func exitCodeForResult(r core.Result) int {
+	if !r.Matched {
+		return exitUnknown
+	}
+	if r.Confidence.IsHigh(0.9) {
+		return exitDetected
+	}
+	return exitPartial
+}
+
+// aliasForProtocol returns the short CLI alias for a protocol.
+func aliasForProtocol(p core.Protocol) string {
+	for alias, proto := range protocolAliases {
+		if proto == p {
+			return alias
+		}
+	}
+	return p.String()
 }

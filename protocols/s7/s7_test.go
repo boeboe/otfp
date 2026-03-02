@@ -202,8 +202,8 @@ func TestS7DetectConnectionRefused(t *testing.T) {
 
 func TestS7Name(t *testing.T) {
 	fp := New()
-	if fp.Name() != "Siemens S7comm" {
-		t.Errorf("Name() = %q, want %q", fp.Name(), "Siemens S7comm")
+	if fp.Name() != core.ProtocolS7 {
+		t.Errorf("Name() = %s, want %s", fp.Name(), core.ProtocolS7)
 	}
 }
 

@@ -213,8 +213,8 @@ func TestModbusDetectRandomBinary(t *testing.T) {
 
 func TestModbusName(t *testing.T) {
 	fp := New()
-	if fp.Name() != "Modbus TCP" {
-		t.Errorf("Name() = %q, want %q", fp.Name(), "Modbus TCP")
+	if fp.Name() != core.ProtocolModbus {
+		t.Errorf("Name() = %s, want %s", fp.Name(), core.ProtocolModbus)
 	}
 }
 

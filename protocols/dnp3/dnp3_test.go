@@ -261,8 +261,8 @@ func TestDNP3DetectInvalidLength(t *testing.T) {
 
 func TestDNP3Name(t *testing.T) {
 	fp := New()
-	if fp.Name() != "DNP3 (TCP)" {
-		t.Errorf("Name() = %q, want %q", fp.Name(), "DNP3 (TCP)")
+	if fp.Name() != core.ProtocolDNP3 {
+		t.Errorf("Name() = %s, want %s", fp.Name(), core.ProtocolDNP3)
 	}
 }
 

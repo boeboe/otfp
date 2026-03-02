@@ -141,8 +141,8 @@ func TestCANDetectConnectionRefused(t *testing.T) {
 
 func TestCANName(t *testing.T) {
 	fp := New()
-	if fp.Name() != "CAN (TCP Gateway)" {
-		t.Errorf("Name() = %q, want %q", fp.Name(), "CAN (TCP Gateway)")
+	if fp.Name() != core.ProtocolCAN {
+		t.Errorf("Name() = %s, want %s", fp.Name(), core.ProtocolCAN)
 	}
 }
 

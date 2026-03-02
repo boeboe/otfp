@@ -69,7 +69,7 @@ func validateResponse(resp []byte) core.Result {
 		return core.NoMatch(protocolName)
 	}
 
-	confidence := 0.0
+	var confidence core.Confidence
 	details := ""
 
 	// Check 1: Valid TPKT header.
@@ -128,5 +128,10 @@ func validateResponse(resp []byte) core.Result {
 		confidence = 1.0
 	}
 
-	return core.Match(protocolName, confidence, details)
+	result := core.Match(protocolName, confidence, details)
+	result.Fingerprint = &core.Fingerprint{
+		ID:        "mms.cotp_cc",
+		Signature: details,
+	}
+	return result
 }

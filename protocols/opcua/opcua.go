@@ -108,7 +108,7 @@ func validateResponse(resp []byte) core.Result {
 		return core.NoMatch(protocolName)
 	}
 
-	confidence := 0.0
+	var confidence core.Confidence
 	details := ""
 
 	// Check 1: Message type is ACK or ERR (both are valid OPC UA responses).
@@ -158,5 +158,10 @@ func validateResponse(resp []byte) core.Result {
 		return core.NoMatch(protocolName)
 	}
 
-	return core.Match(protocolName, confidence, details)
+	result := core.Match(protocolName, confidence, details)
+	result.Fingerprint = &core.Fingerprint{
+		ID:        "opcua.hel_ack",
+		Signature: details,
+	}
+	return result
 }

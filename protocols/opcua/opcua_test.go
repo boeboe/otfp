@@ -190,8 +190,8 @@ func TestOPCUADetectConnectionRefused(t *testing.T) {
 
 func TestOPCUAName(t *testing.T) {
 	fp := New()
-	if fp.Name() != "OPC UA" {
-		t.Errorf("Name() = %q, want %q", fp.Name(), "OPC UA")
+	if fp.Name() != core.ProtocolOPCUA {
+		t.Errorf("Name() = %s, want %s", fp.Name(), core.ProtocolOPCUA)
 	}
 }
 
