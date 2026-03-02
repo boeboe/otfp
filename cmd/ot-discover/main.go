@@ -9,8 +9,12 @@ import (
 	"time"
 
 	"github.com/boeboe/otfp/core"
+	"github.com/boeboe/otfp/protocols/bacnet"
+	"github.com/boeboe/otfp/protocols/can"
 	"github.com/boeboe/otfp/protocols/mms"
 	"github.com/boeboe/otfp/protocols/modbus"
+	"github.com/boeboe/otfp/protocols/opcua"
+	"github.com/boeboe/otfp/protocols/profinet"
 	"github.com/boeboe/otfp/protocols/s7"
 )
 
@@ -32,15 +36,19 @@ const (
 
 // protocolAliases maps CLI-friendly names to registered protocol names.
 var protocolAliases = map[string]string{
-	"modbus": "Modbus TCP",
-	"mms":    "IEC 61850 MMS",
-	"s7":     "Siemens S7comm",
+	"modbus":   "Modbus TCP",
+	"mms":      "IEC 61850 MMS",
+	"s7":       "Siemens S7comm",
+	"opcua":    "OPC UA",
+	"bacnet":   "BACnet/IP",
+	"can":      "CAN (TCP Gateway)",
+	"profinet": "PROFINET (Ethernet)",
 }
 
 func main() {
 	ip := flag.String("ip", "", "Target IP address (required)")
 	port := flag.Int("port", 0, "Target TCP port (required)")
-	check := flag.String("check", "", "Check specific protocol: modbus, mms, s7")
+	check := flag.String("check", "", "Check specific protocol: modbus, mms, s7, opcua, bacnet, can, profinet")
 	timeout := flag.Duration("timeout", 5*time.Second, "Connection timeout")
 	verbose := flag.Bool("verbose", false, "Show detailed detection info")
 	parallel := flag.Bool("parallel", true, "Run protocol checks in parallel")
@@ -55,6 +63,10 @@ func main() {
 		fmt.Fprintf(os.Stderr, "  modbus    Modbus TCP\n")
 		fmt.Fprintf(os.Stderr, "  mms       IEC 61850 MMS (ISO-on-TCP)\n")
 		fmt.Fprintf(os.Stderr, "  s7        Siemens S7comm\n")
+		fmt.Fprintf(os.Stderr, "  opcua     OPC UA (Binary)\n")
+		fmt.Fprintf(os.Stderr, "  bacnet    BACnet/IP (BVLL)\n")
+		fmt.Fprintf(os.Stderr, "  can       CAN TCP Gateway (SLCAN)\n")
+		fmt.Fprintf(os.Stderr, "  profinet  PROFINET (DCE/RPC)\n")
 		fmt.Fprintf(os.Stderr, "\nExit codes:\n")
 		fmt.Fprintf(os.Stderr, "  0  Protocol detected\n")
 		fmt.Fprintf(os.Stderr, "  1  Unknown protocol\n")
@@ -87,7 +99,7 @@ func main() {
 	if *check != "" {
 		lower := strings.ToLower(*check)
 		if _, ok := protocolAliases[lower]; !ok {
-			fmt.Fprintf(os.Stderr, "Error: unknown protocol %q. Supported: modbus, mms, s7\n", *check)
+			fmt.Fprintf(os.Stderr, "Error: unknown protocol %q. Supported: modbus, mms, s7, opcua, bacnet, can, profinet\n", *check)
 			os.Exit(exitBadParams)
 		}
 	}
@@ -97,6 +109,10 @@ func main() {
 	_ = registry.Register(modbus.New())
 	_ = registry.Register(mms.New())
 	_ = registry.Register(s7.New())
+	_ = registry.Register(opcua.New())
+	_ = registry.Register(bacnet.New())
+	_ = registry.Register(can.New())
+	_ = registry.Register(profinet.New())
 
 	// Build target.
 	target := core.Target{

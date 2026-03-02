@@ -11,13 +11,18 @@ A pure Golang library for OT (Operational Technology) protocol fingerprinting at
 | **Modbus TCP** | MBAP header validation, Transaction ID echo, FC validation | Single exchange |
 | **IEC 61850 MMS** | TPKT/COTP Connection Request → Confirm | Single exchange |
 | **Siemens S7comm** | TPKT/COTP CR→CC + S7 Setup Communication → ACK | Two-phase |
+| **OPC UA** | HEL/ACK binary handshake | Single exchange |
+| **BACnet/IP** | BVLL Who-Is broadcast probe | Single exchange |
+| **CAN (TCP Gateway)** | SLCAN ASCII command probe | Single exchange |
+| **PROFINET** | DCE/RPC Bind with PNIO CM UUID | Single exchange |
 
-### Future Protocols (Extensible)
+### TCP Detectability Notes
 
-- BACnet/IP
-- DNP3
-- EtherNet/IP
-- OPC UA
+All protocols above are detectable over raw TCP connections. Some notes on real-world deployments:
+
+- **PROFIBUS** uses RS-485 serial and is not directly detectable over TCP. PROFINET is its TCP/IP successor.
+- **EtherNet/IP** and **DNP3** are planned for future releases.
+- **CAN** detection targets TCP-to-CAN gateways that expose an SLCAN ASCII interface over a TCP socket.
 
 ## Key Principles
 
@@ -71,7 +76,7 @@ Modbus: true
 |---|---|---|
 | `--ip` | Target IP address (required) | — |
 | `--port` | Target TCP port (required) | — |
-| `--check` | Check specific protocol: `modbus`, `mms`, `s7` | (all) |
+| `--check` | Check specific protocol: `modbus`, `mms`, `s7`, `opcua`, `bacnet`, `can`, `profinet` | (all) |
 | `--timeout` | Connection timeout | `5s` |
 | `--verbose` | Show detailed detection info | `false` |
 | `--parallel` | Run checks in parallel | `true` |
@@ -98,8 +103,12 @@ import (
     "time"
 
     "github.com/boeboe/otfp/core"
+    "github.com/boeboe/otfp/protocols/bacnet"
+    "github.com/boeboe/otfp/protocols/can"
     "github.com/boeboe/otfp/protocols/modbus"
     "github.com/boeboe/otfp/protocols/mms"
+    "github.com/boeboe/otfp/protocols/opcua"
+    "github.com/boeboe/otfp/protocols/profinet"
     "github.com/boeboe/otfp/protocols/s7"
 )
 
@@ -109,6 +118,10 @@ func main() {
     registry.Register(modbus.New())
     registry.Register(mms.New())
     registry.Register(s7.New())
+    registry.Register(opcua.New())
+    registry.Register(bacnet.New())
+    registry.Register(can.New())
+    registry.Register(profinet.New())
 
     // Create detection engine.
     engine := core.NewEngine(registry, core.DefaultEngineConfig())
@@ -142,17 +155,17 @@ fmt.Printf("Modbus: %v\n", result.Matched)
 ### Custom Fingerprinter
 
 ```go
-type BACnetFingerprinter struct{}
+type MyProtocolFingerprinter struct{}
 
-func (f *BACnetFingerprinter) Name() string { return "BACnet/IP" }
+func (f *MyProtocolFingerprinter) Name() string { return "MyProtocol" }
 
-func (f *BACnetFingerprinter) Detect(ctx context.Context, target core.Target) (core.Result, error) {
+func (f *MyProtocolFingerprinter) Detect(ctx context.Context, target core.Target) (core.Result, error) {
     // Your detection logic here...
-    return core.Match("BACnet/IP", 0.9, "valid BACnet response"), nil
+    return core.Match("MyProtocol", 0.9, "valid response"), nil
 }
 
 // Register it:
-registry.Register(&BACnetFingerprinter{})
+registry.Register(&MyProtocolFingerprinter{})
 ```
 
 ## Architecture
@@ -172,8 +185,16 @@ otfp/
 │   │   └── modbus.go          # MBAP header validation
 │   ├── mms/                   # IEC 61850 MMS fingerprinter
 │   │   └── mms.go             # COTP CR/CC exchange
-│   └── s7/                    # Siemens S7comm fingerprinter
-│       └── s7.go              # Two-phase: COTP + S7 Setup
+│   ├── s7/                    # Siemens S7comm fingerprinter
+│   │   └── s7.go              # Two-phase: COTP + S7 Setup
+│   ├── opcua/                 # OPC UA fingerprinter
+│   │   └── opcua.go           # HEL/ACK binary handshake
+│   ├── bacnet/                # BACnet/IP fingerprinter
+│   │   └── bacnet.go          # BVLL Who-Is probe
+│   ├── can/                   # CAN TCP Gateway fingerprinter
+│   │   └── can.go             # SLCAN ASCII command detection
+│   └── profinet/              # PROFINET fingerprinter
+│       └── profinet.go        # DCE/RPC Bind with PNIO CM UUID
 ├── transport/                 # TCP transport layer
 │   └── tcp.go                 # Connection with timeout/deadline support
 ├── cmd/
@@ -234,6 +255,60 @@ Two-phase detection that distinguishes S7 from pure MMS:
 - No error (+0.10)
 - Setup Comm function confirmed (+0.10)
 
+### OPC UA (Binary)
+
+Sends an **OPC UA HEL (Hello)** message and validates the ACK response:
+
+1. Constructs a minimal HEL message with endpoint URL `opc.tcp://<ip>:<port>`
+2. Validates ACK message type signature ("ACK")
+3. Checks message size, protocol version, and buffer size fields
+
+**Confidence factors:**
+- ACK message type received (+0.40)
+- Message size plausible (+0.20)
+- Protocol version valid (+0.20)
+- Buffer sizes reasonable (+0.20)
+
+### BACnet/IP (BVLL)
+
+Sends a **BVLL Original-Unicast-NPDU** containing a **Who-Is** service request:
+
+1. Constructs BVLL header (type 0x81) with Original-Unicast function (0x0A)
+2. Includes minimal NPDU with Who-Is APDU
+3. Validates response BVLL type byte and function code
+
+**Confidence factors:**
+- BVLL type byte 0x81 (+0.40)
+- Valid BVLL function code (+0.30)
+- Length field consistent (+0.20)
+- NPDU version present (+0.10)
+
+### CAN (TCP Gateway)
+
+Probes for **SLCAN** (Serial Line CAN) ASCII protocol over TCP:
+
+1. Sends `V\r` (version query) and checks for ASCII response
+2. Sends `N\r` (serial number query) as a second probe
+3. Validates response contains printable ASCII terminated by CR
+
+**Confidence factors:**
+- ASCII printable content (+0.40)
+- CR-terminated response (+0.20)
+- SLCAN command pattern match (+0.40)
+
+### PROFINET (DCE/RPC)
+
+Sends a **DCE/RPC Bind** request with the PNIO Connection Manager UUID:
+
+1. Constructs DCE/RPC Bind PDU (type 0x0B) with PNIO CM interface UUID
+2. Validates Bind-Ack response (type 0x0C)
+3. Checks for accepted PNIO transfer syntax
+
+**Confidence factors:**
+- Bind-Ack received (+0.40)
+- Fragment length valid (+0.10)
+- PNIO transfer syntax accepted (+0.50)
+
 ## Security Considerations
 
 This library is designed for safe use in ICS/SCADA environments:
@@ -260,9 +335,17 @@ go test ./... -race
 go test ./protocols/modbus/ -v
 go test ./protocols/mms/ -v
 go test ./protocols/s7/ -v
+go test ./protocols/opcua/ -v
+go test ./protocols/bacnet/ -v
+go test ./protocols/can/ -v
+go test ./protocols/profinet/ -v
 
 # Run fuzz tests (Go 1.18+)
 go test ./protocols/modbus/ -fuzz=FuzzValidateResponse -fuzztime=30s
+go test ./protocols/opcua/ -fuzz=FuzzValidateResponse -fuzztime=30s
+go test ./protocols/bacnet/ -fuzz=FuzzValidateResponse -fuzztime=30s
+go test ./protocols/can/ -fuzz=FuzzValidateResponse -fuzztime=30s
+go test ./protocols/profinet/ -fuzz=FuzzValidateResponse -fuzztime=30s
 ```
 
 ## License
