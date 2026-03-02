@@ -24,19 +24,19 @@ func startMockServer(t *testing.T, response []byte) (string, func()) {
 		if err != nil {
 			return
 		}
-		defer conn.Close()
+		defer conn.Close() //nolint:errcheck
 
 		buf := make([]byte, 1024)
-		conn.SetReadDeadline(time.Now().Add(2 * time.Second))
-		conn.Read(buf)
+		_ = conn.SetReadDeadline(time.Now().Add(2 * time.Second))
+		_, _ = conn.Read(buf)
 
 		if response != nil {
-			conn.SetWriteDeadline(time.Now().Add(2 * time.Second))
-			conn.Write(response)
+			_ = conn.SetWriteDeadline(time.Now().Add(2 * time.Second))
+			_, _ = conn.Write(response)
 		}
 	}()
 
-	return ln.Addr().String(), func() { ln.Close() }
+	return ln.Addr().String(), func() { _ = ln.Close() }
 }
 
 // buildModbusResponse creates a valid Modbus TCP response frame.

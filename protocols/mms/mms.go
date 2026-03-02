@@ -39,7 +39,7 @@ func (f *Fingerprinter) Detect(ctx context.Context, target core.Target) (core.Re
 	if err != nil {
 		return core.NoMatch(protocolName), fmt.Errorf("mms: %w", err)
 	}
-	defer conn.Close()
+	defer conn.Close() //nolint:errcheck
 
 	// Build ISO-on-TCP COTP Connection Request.
 	// Use standard TSAP parameters for MMS (generic ISO transport).

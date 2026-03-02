@@ -14,6 +14,15 @@ import (
 	"github.com/boeboe/otfp/protocols/s7"
 )
 
+// Version information, injected at build time via ldflags.
+var (
+	Version   = "dev"
+	Branch    = "unknown"
+	Revision  = "unknown"
+	BuildUser = "unknown"
+	BuildDate = "unknown"
+)
+
 const (
 	exitDetected  = 0
 	exitUnknown   = 1
@@ -35,6 +44,7 @@ func main() {
 	timeout := flag.Duration("timeout", 5*time.Second, "Connection timeout")
 	verbose := flag.Bool("verbose", false, "Show detailed detection info")
 	parallel := flag.Bool("parallel", true, "Run protocol checks in parallel")
+	showVersion := flag.Bool("version", false, "Print version information and exit")
 
 	flag.Usage = func() {
 		fmt.Fprintf(os.Stderr, "Usage: ot-discover --ip <address> --port <port> [options]\n\n")
@@ -53,6 +63,15 @@ func main() {
 	}
 
 	flag.Parse()
+
+	if *showVersion {
+		fmt.Printf("ot-discover version %s\n", Version)
+		fmt.Printf("  branch:     %s\n", Branch)
+		fmt.Printf("  revision:   %s\n", Revision)
+		fmt.Printf("  build user: %s\n", BuildUser)
+		fmt.Printf("  build date: %s\n", BuildDate)
+		os.Exit(0)
+	}
 
 	// Validate parameters.
 	if *ip == "" {

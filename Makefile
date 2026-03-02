@@ -2,7 +2,7 @@
 # This will output the help for each task
 # thanks to https://marmelab.com/blog/2016/02/29/auto-documented-makefile.html
 
-.PHONY: help all build lint vet test check clean
+.PHONY: help all build install lint vet test check clean
 help: ## This help
 	@awk 'BEGIN {FS = ":.*?## "} /^[a-zA-Z0-9_-]+:.*?## / {printf "\033[36m%-30s\033[0m %s\n", $$1, $$2}' $(MAKEFILE_LIST)
 
@@ -10,19 +10,27 @@ help: ## This help
 BIN_DIR := bin
 PKGS := $(shell go list ./...)
 
-all: build ## Default target: build all cmd entrypoints
+# Version info
+VERSION := $(shell cat version.txt)
+BRANCH := $(shell git rev-parse --abbrev-ref HEAD 2>/dev/null || echo unknown)
+REVISION := $(shell git rev-parse --short HEAD 2>/dev/null || echo unknown)
+BUILD_USER := $(shell whoami)
+BUILD_DATE := $(shell date -u +%Y%m%d-%H:%M:%S)
+LDFLAGS := -X main.Version=$(VERSION) -X main.Branch=$(BRANCH) -X main.Revision=$(REVISION) -X main.BuildUser=$(BUILD_USER) -X main.BuildDate=$(BUILD_DATE)
 
-build: ## Build binaries from cmd/*/main.go
+all: build ## Default target: build ot-discover binary
+
+build: check ## Build ot-discover binary
 	@mkdir -p $(BIN_DIR)
-	@for dir in cmd/*/; do \
-		name="$$(basename "$$dir")"; \
-		go build -o "$(BIN_DIR)/$$name" "./$$dir"; \
-	done
+	go build -ldflags "$(LDFLAGS)" -o $(BIN_DIR)/ot-discover ./cmd/ot-discover
+
+install: build ## Install ot-discover to GOPATH/bin
+	go install -ldflags "$(LDFLAGS)" ./cmd/ot-discover
 
 lint: ## Run linter (golangci-lint preferred, fallback golint)
-	@echo "Running linter on packages: $(PKGS)"
+	@echo "Running linter..."
 	@if command -v golangci-lint >/dev/null 2>&1; then \
-		golangci-lint run $(PKGS); \
+		golangci-lint run ./...; \
 	elif command -v golint >/dev/null 2>&1; then \
 		golint $(PKGS); \
 	else \

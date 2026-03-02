@@ -12,12 +12,12 @@ func TestDialSuccess(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer ln.Close()
+	defer ln.Close() //nolint:errcheck
 
 	go func() {
 		conn, _ := ln.Accept()
 		if conn != nil {
-			conn.Close()
+			_ = conn.Close()
 		}
 	}()
 
@@ -25,7 +25,7 @@ func TestDialSuccess(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Dial failed: %v", err)
 	}
-	defer conn.Close()
+	defer conn.Close() //nolint:errcheck
 }
 
 func TestDialConnectionRefused(t *testing.T) {
@@ -50,7 +50,7 @@ func TestSendReceive(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer ln.Close()
+	defer ln.Close() //nolint:errcheck
 
 	echoData := []byte{0x01, 0x02, 0x03, 0x04}
 
@@ -59,18 +59,18 @@ func TestSendReceive(t *testing.T) {
 		if err != nil {
 			return
 		}
-		defer conn.Close()
+		defer conn.Close() //nolint:errcheck
 
 		buf := make([]byte, 1024)
 		n, _ := conn.Read(buf)
-		conn.Write(buf[:n])
+		_, _ = conn.Write(buf[:n])
 	}()
 
 	conn, err := Dial(context.Background(), ln.Addr().String(), 2*time.Second)
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer conn.Close()
+	defer conn.Close() //nolint:errcheck
 
 	resp, err := conn.SendReceive(echoData, 1024)
 	if err != nil {
@@ -93,14 +93,14 @@ func TestReceiveTimeout(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer ln.Close()
+	defer ln.Close() //nolint:errcheck
 
 	go func() {
 		conn, err := ln.Accept()
 		if err != nil {
 			return
 		}
-		defer conn.Close()
+		defer conn.Close() //nolint:errcheck
 		// Never write back - let it timeout.
 		time.Sleep(5 * time.Second)
 	}()
@@ -109,7 +109,7 @@ func TestReceiveTimeout(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer conn.Close()
+	defer conn.Close() //nolint:errcheck
 
 	_, err = conn.Receive(1024)
 	if err == nil {

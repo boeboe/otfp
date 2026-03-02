@@ -1,15 +1,16 @@
-name: Release Go Library
-run-name: "Release (${{ inputs.bump_type }}) from ${{ github.ref_name }}"
+name: Build and Release ot-discover
+run-name: "Build and Release of ot-discover on '${{ github.ref_name }}' with bump '${{ github.event.inputs.bump }}'"
 
 on:
   workflow_dispatch:
     inputs:
-      bump_type:
-        description: "Release bump type"
+      bump:
+        description: "Version bump strategy (none, patch, minor, major)"
         required: true
+        default: "none"
         type: choice
-        default: patch
         options:
+          - none
           - patch
           - minor
           - major
@@ -17,29 +18,89 @@ on:
 permissions:
   contents: write
 
-concurrency:
-  group: release-${{ github.ref }}
-  cancel-in-progress: false
-
 jobs:
-  release:
-    name: Create release tag and GitHub Release
+  bump-version:
+    name: Bump Version
     runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.bump.outputs.version }}
 
     steps:
-      - name: Check out repository
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
-      - name: Ensure workflow runs from default branch
-        env:
-          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+      - name: Configure git
         run: |
-          if [ "${GITHUB_REF_NAME}" != "${DEFAULT_BRANCH}" ]; then
-            echo "This workflow must run from default branch '${DEFAULT_BRANCH}', current: '${GITHUB_REF_NAME}'."
-            exit 1
+          git config user.name "GitHub Actions"
+          git config user.email "actions@github.com"
+
+      - name: Bump version
+        id: bump
+        run: |
+          VERSION=$(cat version.txt)
+          IFS='.' read -r major minor patch <<< "$VERSION"
+          case "${{ github.event.inputs.bump }}" in
+            major)
+              major=$((major + 1)); minor=0; patch=0 ;;
+            minor)
+              minor=$((minor + 1)); patch=0 ;;
+            patch)
+              patch=$((patch + 1)) ;;
+            none)
+              ;;
+          esac
+          NEW_VERSION="$major.$minor.$patch"
+          echo "$NEW_VERSION" > version.txt
+          git add version.txt
+          if [[ "${{ github.event.inputs.bump }}" != "none" ]]; then
+            git commit -m "Bump version to $NEW_VERSION"
+            git push origin HEAD
           fi
+          echo "version=$NEW_VERSION" >> $GITHUB_OUTPUT
+
+      - name: Show calculated version
+        run: |
+          echo "🔖 Final version to build: $(cat version.txt)"
+
+  build:
+    name: Build ${{ matrix.target }}
+    needs: bump-version
+    strategy:
+      matrix:
+        include:
+          - os: ubuntu-latest
+            target: linux-amd64
+            goos: linux
+            goarch: amd64
+          - os: ubuntu-latest
+            target: linux-arm64
+            goos: linux
+            goarch: arm64
+          - os: ubuntu-latest
+            target: linux-armv7
+            goos: linux
+            goarch: arm
+            goarm: "7"
+          - os: ubuntu-latest
+            target: darwin-amd64
+            goos: darwin
+            goarch: amd64
+          - os: ubuntu-latest
+            target: darwin-arm64
+            goos: darwin
+            goarch: arm64
+          - os: ubuntu-latest
+            target: windows-amd64
+            goos: windows
+            goarch: amd64
+            ext: .exe
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.repository.default_branch }}
 
       - name: Set up Go
         uses: actions/setup-go@v5
@@ -47,88 +108,67 @@ jobs:
           go-version-file: go.mod
           cache: true
 
-      - name: Run library tests
-        shell: bash
-        run: |
-          set -euo pipefail
-          go test ./...
-
-      - name: Determine next version
-        id: version
-        shell: bash
+      - name: Build release binary
         env:
-          BUMP_TYPE: ${{ inputs.bump_type }}
+          VERSION: ${{ needs.bump-version.outputs.version }}
+          CGO_ENABLED: "0"
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+          GOARM: ${{ matrix.goarm }}
         run: |
-          set -euo pipefail
+          echo "$VERSION" > version.txt
+          BRANCH=$(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo "unknown")
+          REVISION=$(git rev-parse --short HEAD 2>/dev/null || echo "unknown")
+          BUILD_DATE=$(date -u +%Y%m%d-%H:%M:%S)
+          LDFLAGS="-X main.Version=$VERSION -X main.Branch=$BRANCH -X main.Revision=$REVISION -X main.BuildUser=github-actions -X main.BuildDate=$BUILD_DATE"
 
-          latest_tag=$(git tag -l 'v[0-9]*.[0-9]*.[0-9]*' --sort=-v:refname | head -n1 || true)
+          mkdir -p release
+          go build -ldflags "$LDFLAGS" -o "release/ot-discover${{ matrix.ext }}" ./cmd/ot-discover
+          tar -czf "release/ot-discover-${VERSION}-${{ matrix.target }}.tar.gz" -C release "ot-discover${{ matrix.ext }}"
+          rm -f "release/ot-discover${{ matrix.ext }}"
+          echo "Created release/ot-discover-${VERSION}-${{ matrix.target }}.tar.gz"
 
-          if [[ -z "$latest_tag" ]]; then
-            echo "No existing semver tag found (expected format vX.Y.Z). Create an initial tag first."
-            exit 1
-          fi
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ot-discover-${{ needs.bump-version.outputs.version }}-${{ matrix.target }}
+          path: release/ot-discover-${{ needs.bump-version.outputs.version }}-${{ matrix.target }}.tar.gz
 
-          MIN_VERSION="${latest_tag#v}"
-          base_version="$MIN_VERSION"
+  create-github-release:
+    name: Create GitHub Release
+    needs:
+      - bump-version
+      - build
+    runs-on: ubuntu-latest
 
-          IFS='.' read -r major minor patch <<< "$base_version"
+    steps:
+      - uses: actions/checkout@v4
 
-          case "$BUMP_TYPE" in
-            patch)
-              patch=$((patch + 1))
-              ;;
-            minor)
-              minor=$((minor + 1))
-              patch=0
-              ;;
-            major)
-              major=$((major + 1))
-              minor=0
-              patch=0
-              ;;
-            *)
-              echo "Unsupported bump type: $BUMP_TYPE"
-              exit 1
-              ;;
-          esac
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          pattern: ot-discover-${{ needs.bump-version.outputs.version }}-*
+          merge-multiple: true
 
-          next_version="${major}.${minor}.${patch}"
-          next_tag="v${next_version}"
+      - name: List downloaded artifacts
+        run: ls -lah artifacts/
 
-          if git rev-parse "$next_tag" >/dev/null 2>&1; then
-            echo "Tag $next_tag already exists."
-            exit 1
-          fi
-
-          echo "base_version=$base_version" >> "$GITHUB_OUTPUT"
-          echo "version=$next_version" >> "$GITHUB_OUTPUT"
-          echo "tag=$next_tag" >> "$GITHUB_OUTPUT"
-
-          echo "Resolved next release tag: $next_tag (bump: $BUMP_TYPE, base: $base_version, latest tag: $latest_tag)"
-
-      - name: Create and push tag
-        env:
-          TAG: ${{ steps.version.outputs.tag }}
-        run: |
-          set -euo pipefail
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-
-          git tag -a "$TAG" -m "Release $TAG"
-          git push origin "$TAG"
-
-      - name: Create GitHub Release
+      - name: Create Release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: ${{ steps.version.outputs.tag }}
-          name: ${{ steps.version.outputs.tag }}
+          tag_name: v${{ needs.bump-version.outputs.version }}
+          name: v${{ needs.bump-version.outputs.version }}
+          draft: false
+          prerelease: false
           generate_release_notes: true
+          files: artifacts/*.tar.gz
 
       - name: Publish summary
         run: |
           {
             echo "## Release created"
-            echo "- Bump type: ${{ inputs.bump_type }}"
-            echo "- Base version: ${{ steps.version.outputs.base_version }}"
-            echo "- Tag: ${{ steps.version.outputs.tag }}"
+            echo "- Bump type: ${{ github.event.inputs.bump }}"
+            echo "- Version: ${{ needs.bump-version.outputs.version }}"
+            echo "- Tag: v${{ needs.bump-version.outputs.version }}"
           } >> "$GITHUB_STEP_SUMMARY"

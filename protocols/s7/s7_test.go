@@ -24,30 +24,30 @@ func startMockS7Server(t *testing.T, cotpResp []byte, s7Resp []byte) (string, fu
 		if err != nil {
 			return
 		}
-		defer conn.Close()
+		defer conn.Close() //nolint:errcheck
 
 		buf := make([]byte, 1024)
 
 		// Phase 1: Read COTP CR, respond with COTP CC.
-		conn.SetReadDeadline(time.Now().Add(2 * time.Second))
-		conn.Read(buf)
+		_ = conn.SetReadDeadline(time.Now().Add(2 * time.Second))
+		_, _ = conn.Read(buf)
 
 		if cotpResp != nil {
-			conn.SetWriteDeadline(time.Now().Add(2 * time.Second))
-			conn.Write(cotpResp)
+			_ = conn.SetWriteDeadline(time.Now().Add(2 * time.Second))
+			_, _ = conn.Write(cotpResp)
 		}
 
 		// Phase 2: Read S7 Setup, respond with S7 Ack.
-		conn.SetReadDeadline(time.Now().Add(2 * time.Second))
-		conn.Read(buf)
+		_ = conn.SetReadDeadline(time.Now().Add(2 * time.Second))
+		_, _ = conn.Read(buf)
 
 		if s7Resp != nil {
-			conn.SetWriteDeadline(time.Now().Add(2 * time.Second))
-			conn.Write(s7Resp)
+			_ = conn.SetWriteDeadline(time.Now().Add(2 * time.Second))
+			_, _ = conn.Write(s7Resp)
 		}
 	}()
 
-	return ln.Addr().String(), func() { ln.Close() }
+	return ln.Addr().String(), func() { _ = ln.Close() }
 }
 
 func parseAddr(addr string) (string, int) {

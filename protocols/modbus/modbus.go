@@ -55,7 +55,7 @@ func (f *Fingerprinter) Detect(ctx context.Context, target core.Target) (core.Re
 	if err != nil {
 		return core.NoMatch(protocolName), fmt.Errorf("modbus: %w", err)
 	}
-	defer conn.Close()
+	defer conn.Close() //nolint:errcheck
 
 	// Build minimal Modbus TCP probe.
 	probe := buildProbe()

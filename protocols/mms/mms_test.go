@@ -22,19 +22,19 @@ func startMockServer(t *testing.T, response []byte) (string, func()) {
 		if err != nil {
 			return
 		}
-		defer conn.Close()
+		defer conn.Close() //nolint:errcheck
 
 		buf := make([]byte, 1024)
-		conn.SetReadDeadline(time.Now().Add(2 * time.Second))
-		conn.Read(buf)
+		_ = conn.SetReadDeadline(time.Now().Add(2 * time.Second))
+		_, _ = conn.Read(buf)
 
 		if response != nil {
-			conn.SetWriteDeadline(time.Now().Add(2 * time.Second))
-			conn.Write(response)
+			_ = conn.SetWriteDeadline(time.Now().Add(2 * time.Second))
+			_, _ = conn.Write(response)
 		}
 	}()
 
-	return ln.Addr().String(), func() { ln.Close() }
+	return ln.Addr().String(), func() { _ = ln.Close() }
 }
 
 func parseAddr(addr string) (string, int) {
@@ -49,11 +49,11 @@ func parseAddr(addr string) (string, int) {
 // buildCOTPCC builds a valid COTP Connection Confirm wrapped in TPKT.
 func buildCOTPCC() []byte {
 	cc := []byte{
-		0x06,          // Header length
+		0x06,           // Header length
 		iso.COTPTypeCC, // CC type
-		0x00, 0x01,    // Dst ref
-		0x00, 0x02,    // Src ref
-		0x00,          // Class 0
+		0x00, 0x01,     // Dst ref
+		0x00, 0x02, // Src ref
+		0x00, // Class 0
 	}
 	return iso.BuildTPKT(cc)
 }

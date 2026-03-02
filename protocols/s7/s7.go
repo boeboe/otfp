@@ -57,7 +57,7 @@ func (f *Fingerprinter) Detect(ctx context.Context, target core.Target) (core.Re
 	if err != nil {
 		return core.NoMatch(protocolName), fmt.Errorf("s7: %w", err)
 	}
-	defer conn.Close()
+	defer conn.Close() //nolint:errcheck
 
 	// Phase 1: COTP Connection Request.
 	// Use S7-specific TSAP parameters:
@@ -133,12 +133,12 @@ func buildS7SetupProbe() []byte {
 
 	// S7 header (Job request).
 	s7Header := make([]byte, s7HeaderSize)
-	s7Header[0] = s7ProtocolID                                          // Protocol ID: 0x32
-	s7Header[1] = s7MsgTypeJob                                          // Message type: Job
-	binary.BigEndian.PutUint16(s7Header[2:4], 0x0000)                   // Reserved
-	binary.BigEndian.PutUint16(s7Header[4:6], 0x0001)                   // PDU reference
-	binary.BigEndian.PutUint16(s7Header[6:8], uint16(1+len(s7Params)))  // Parameter length (function code + params)
-	binary.BigEndian.PutUint16(s7Header[8:10], 0x0000)                  // Data length
+	s7Header[0] = s7ProtocolID                                         // Protocol ID: 0x32
+	s7Header[1] = s7MsgTypeJob                                         // Message type: Job
+	binary.BigEndian.PutUint16(s7Header[2:4], 0x0000)                  // Reserved
+	binary.BigEndian.PutUint16(s7Header[4:6], 0x0001)                  // PDU reference
+	binary.BigEndian.PutUint16(s7Header[6:8], uint16(1+len(s7Params))) // Parameter length (function code + params)
+	binary.BigEndian.PutUint16(s7Header[8:10], 0x0000)                 // Data length
 
 	// S7 PDU: header + function code + parameters.
 	s7PDU := append(s7Header, s7FuncSetupComm)
@@ -146,9 +146,9 @@ func buildS7SetupProbe() []byte {
 
 	// Wrap in COTP DT (Data Transfer) header.
 	cotpDT := []byte{
-		0x02,          // COTP header length
+		0x02,           // COTP header length
 		iso.COTPTypeDT, // DT PDU type
-		0x80,          // TPDU number + EOT (last fragment)
+		0x80,           // TPDU number + EOT (last fragment)
 	}
 
 	// Combine COTP DT + S7 PDU.
@@ -205,7 +205,9 @@ func validateS7Response(resp []byte, baseConfidence float64, baseDetails string)
 
 	// Check message type (should be Ack-Data for setup communication).
 	msgType := s7Data[1]
-	if msgType == s7MsgTypeAckData {
+
+	switch msgType {
+	case s7MsgTypeAckData:
 		confidence += 0.20
 		details += ", Ack-Data response"
 
@@ -231,7 +233,8 @@ func validateS7Response(resp []byte, baseConfidence float64, baseDetails string)
 				}
 			}
 		}
-	} else if msgType == s7MsgTypeAck {
+
+	case s7MsgTypeAck:
 		confidence += 0.15
 		details += ", Ack response"
 	}
