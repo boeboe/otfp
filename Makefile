@@ -24,8 +24,8 @@ build: check ## Build otprobe binary
 	@mkdir -p $(BIN_DIR)
 	go build -ldflags "$(LDFLAGS)" -o $(BIN_DIR)/otprobe ./cmd/otprobe
 
-install: build ## Install otprobe to GOPATH/bin
-	go install -ldflags "$(LDFLAGS)" ./cmd/otprobe
+install: build ## Install otprobe to /usr/local/bin (may require sudo)
+	sudo install -m 0755 $(BIN_DIR)/otprobe /usr/local/bin/otprobe
 
 lint: ## Run linter (golangci-lint preferred, fallback golint)
 	@echo "Running linter..."

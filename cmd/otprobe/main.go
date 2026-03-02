@@ -48,7 +48,7 @@ func run(stdout, stderr io.Writer) int {
 		Short: "OT Protocol Fingerprinting Tool",
 		Long:  "Detect industrial protocols on network endpoints using safe, connection-level probes.",
 		CompletionOptions: cobra.CompletionOptions{
-			DisableDefaultCmd: true,
+			DisableDefaultCmd: false,
 		},
 		SilenceUsage:  true,
 		SilenceErrors: true,
