@@ -1,6 +1,7 @@
 # otfp — OT Protocol Fingerprinting Library
 
 [![Go](https://img.shields.io/badge/Go-1.21+-00ADD8?style=flat&logo=go)](https://go.dev/)
+[![Zero Dependencies](https://img.shields.io/badge/dependencies-0-brightgreen)](https://pkg.go.dev/github.com/boeboe/otfp)
 
 A pure Golang library for OT (Operational Technology) protocol fingerprinting at the **connection level only**. Detects industrial protocols based on transport framing and handshake behavior — without invoking application-layer logic.
 
@@ -37,6 +38,8 @@ All protocols above are detectable over raw TCP connections. Some notes on real-
 - **Connection-level only** — no register reads, no device info queries, no deep parsing
 - **Minimal payloads** — standards-compliant, safe for ICS environments
 - **Deterministic detection** — confidence scoring based on protocol framing validation
+- **Priority-based ordering** — protocols tested in optimal priority order with early stop
+- **Structured error handling** — typed errors (`TimeoutError`, `ConnectionError`, `DetectError`)
 - **Zero external dependencies** — pure Go standard library
 
 ## Installation
@@ -48,15 +51,15 @@ go get github.com/boeboe/otfp
 ### CLI Tool
 
 ```bash
-go install github.com/boeboe/otfp/cmd/ot-discover@latest
+go install github.com/boeboe/otfp/cmd/otprobe@latest
 ```
 
-## CLI Usage
+## CLI Usage (`otprobe`)
 
 ### Full Detection (all protocols)
 
 ```bash
-ot-discover --ip 192.168.1.10 --port 102
+otprobe --ip 192.168.1.10 --port 102
 ```
 
 Output:
@@ -69,13 +72,41 @@ Confidence: 0.95
 ### Protocol-Specific Check
 
 ```bash
-ot-discover --ip 192.168.1.10 --port 502 --check modbus
+otprobe --ip 192.168.1.10 --port 502 --check modbus
 ```
 
 Output:
 ```
 Modbus: true
+Confidence: 0.95
+Details: MBAP header valid, TxID echoed
 ```
+
+### JSON Output
+
+```bash
+otprobe --ip 192.168.1.10 --port 502 --output json
+```
+
+```json
+{
+  "target": "192.168.1.10:502",
+  "protocol": "Modbus TCP",
+  "matched": true,
+  "confidence": 0.95,
+  "details": "MBAP header valid, TxID echoed"
+}
+```
+
+### OT-Safe Mode
+
+For production ICS/SCADA environments where minimising network impact is critical:
+
+```bash
+otprobe --ip 192.168.1.10 --port 502 --safe
+```
+
+Safe mode forces sequential detection with low concurrency.
 
 ### Options
 
@@ -84,9 +115,13 @@ Modbus: true
 | `--ip` | Target IP address (required) | — |
 | `--port` | Target TCP port (required) | — |
 | `--check` | Check specific protocol: `modbus`, `mms`, `s7`, `opcua`, `bacnet`, `can`, `profinet`, `dnp3`, `iec104`, `enip` | (all) |
-| `--timeout` | Connection timeout | `5s` |
+| `--timeout` | Per-protocol connection timeout | `5s` |
+| `--global-timeout` | Overall timeout for the entire run (0 = unlimited) | `0` |
 | `--verbose` | Show detailed detection info | `false` |
 | `--parallel` | Run checks in parallel | `true` |
+| `--safe` | OT-safe mode: sequential, low concurrency | `false` |
+| `--output` | Output format: `text` or `json` | `text` |
+| `--version` | Print version information and exit | — |
 
 ### Exit Codes
 
@@ -99,6 +134,8 @@ Modbus: true
 
 ## Library Usage
 
+For complete API documentation, see **[API.md](API.md)**.
+
 ### Basic Detection
 
 ```go
@@ -110,59 +147,46 @@ import (
     "time"
 
     "github.com/boeboe/otfp/core"
-    "github.com/boeboe/otfp/protocols/bacnet"
-    "github.com/boeboe/otfp/protocols/can"
-    "github.com/boeboe/otfp/protocols/dnp3"
-    "github.com/boeboe/otfp/protocols/enip"
-    "github.com/boeboe/otfp/protocols/iec104"
     "github.com/boeboe/otfp/protocols/modbus"
     "github.com/boeboe/otfp/protocols/mms"
-    "github.com/boeboe/otfp/protocols/opcua"
-    "github.com/boeboe/otfp/protocols/profinet"
     "github.com/boeboe/otfp/protocols/s7"
 )
 
 func main() {
-    // Create registry and register protocol fingerprinters.
     registry := core.NewRegistry()
-    registry.Register(mms.New())
-    registry.Register(s7.New())
-    registry.Register(enip.New())
-    registry.Register(iec104.New())
-    registry.Register(dnp3.New())
-    registry.Register(modbus.New())
-    registry.Register(opcua.New())
-    registry.Register(bacnet.New())
-    registry.Register(can.New())
-    registry.Register(profinet.New())
+    _ = registry.Register(mms.New())
+    _ = registry.Register(s7.New())
+    _ = registry.Register(modbus.New())
 
-    // Create detection engine.
     engine := core.NewEngine(registry, core.DefaultEngineConfig())
 
-    // Define target.
     target := core.Target{
         IP:      "192.168.1.10",
         Port:    502,
         Timeout: 5 * time.Second,
     }
 
-    // Detect protocol.
     result := engine.Detect(context.Background(), target)
     fmt.Printf("Protocol: %s\n", result.Protocol)
     fmt.Printf("Matched:  %v\n", result.Matched)
     fmt.Printf("Confidence: %.2f\n", result.Confidence)
-    fmt.Printf("Details: %s\n", result.Details)
 }
 ```
 
 ### Single Protocol Check
 
 ```go
-result, err := engine.DetectProtocol(ctx, target, "Modbus TCP")
+result, err := engine.DetectProtocol(ctx, target, core.ProtocolModbus)
 if err != nil {
     log.Fatal(err)
 }
-fmt.Printf("Modbus: %v\n", result.Matched)
+fmt.Printf("Modbus: %v (confidence %.2f)\n", result.Matched, result.Confidence)
+```
+
+### OT-Safe Engine
+
+```go
+engine := core.NewEngine(registry, core.SafeEngineConfig())
 ```
 
 ### Custom Fingerprinter
@@ -170,14 +194,14 @@ fmt.Printf("Modbus: %v\n", result.Matched)
 ```go
 type MyProtocolFingerprinter struct{}
 
-func (f *MyProtocolFingerprinter) Name() string { return "MyProtocol" }
+func (f *MyProtocolFingerprinter) Name() core.Protocol { return "MyProtocol" }
+func (f *MyProtocolFingerprinter) Priority() int       { return 200 }
 
 func (f *MyProtocolFingerprinter) Detect(ctx context.Context, target core.Target) (core.Result, error) {
     // Your detection logic here...
     return core.Match("MyProtocol", 0.9, "valid response"), nil
 }
 
-// Register it:
 registry.Register(&MyProtocolFingerprinter{})
 ```
 
@@ -186,41 +210,33 @@ registry.Register(&MyProtocolFingerprinter{})
 ```
 otfp/
 ├── core/                      # Core types and engine
-│   ├── engine.go              # Detection orchestration (parallel/sequential)
-│   ├── fingerprinter.go       # Fingerprinter interface
-│   ├── registry.go            # Protocol registry
+│   ├── engine.go              # Detection orchestration (parallel/sequential, semaphore)
+│   ├── errors.go              # Typed errors (DetectError, TimeoutError, ConnectionError)
+│   ├── fingerprinter.go       # Fingerprinter interface (Name, Priority, Detect)
+│   ├── protocol.go            # Protocol type with typed constants
+│   ├── registry.go            # Thread-safe protocol registry (priority-sorted)
 │   ├── result.go              # Detection result with confidence scoring
 │   └── target.go              # Target definition
 ├── protocols/                 # Protocol implementations
 │   ├── iso/                   # Shared ISO-on-TCP (RFC1006) utilities
 │   │   └── iso.go             # TPKT/COTP builders and validators
 │   ├── modbus/                # Modbus TCP fingerprinter
-│   │   └── modbus.go          # MBAP header validation
 │   ├── mms/                   # IEC 61850 MMS fingerprinter
-│   │   └── mms.go             # COTP CR/CC exchange
 │   ├── s7/                    # Siemens S7comm fingerprinter
-│   │   └── s7.go              # Two-phase: COTP + S7 Setup
 │   ├── opcua/                 # OPC UA fingerprinter
-│   │   └── opcua.go           # HEL/ACK binary handshake
 │   ├── bacnet/                # BACnet/IP fingerprinter
-│   │   └── bacnet.go          # BVLL Who-Is probe
 │   ├── can/                   # CAN TCP Gateway fingerprinter
-│   │   └── can.go             # SLCAN ASCII command detection
-│   └── profinet/              # PROFINET fingerprinter
-│       └── profinet.go        # DCE/RPC Bind with PNIO CM UUID
-├── protocols/
+│   ├── profinet/              # PROFINET fingerprinter
 │   ├── dnp3/                  # DNP3 fingerprinter
-│   │   └── dnp3.go            # Link-layer start bytes + CRC
 │   ├── iec104/                # IEC 60870-5-104 fingerprinter
-│   │   └── iec104.go          # APCI STARTDT/CON exchange
 │   └── enip/                  # EtherNet/IP fingerprinter
-│       └── enip.go            # RegisterSession handshake
-├── transport/                 # TCP transport layer
-│   └── tcp.go                 # Connection with timeout/deadline support
 ├── cmd/
-│   └── ot-discover/           # CLI tool
-│       └── main.go
+│   └── otprobe/               # CLI tool
+│       ├── main.go            # CLI entry point (slog, JSON, safe-mode)
+│       ├── buildinfo.go       # Version metadata
+│       └── version.txt        # Semantic version
 ├── go.mod
+├── API.md                     # Library API reference
 └── README.md
 ```
 
@@ -381,12 +397,22 @@ This library is designed for safe use in ICS/SCADA environments:
 - **No flooding** — one connection per check, graceful close
 - **Minimal footprint** — probes are the smallest valid frames possible
 - **Context-aware** — supports cancellation and configurable timeouts
+- **OT-safe mode** — sequential scanning with bounded concurrency
 
 > **Warning:** Even minimal protocol probes may trigger alerts in some IDS/IPS systems configured for OT environments. Always obtain proper authorization before scanning industrial networks.
 
-## Testing
+## Building & Testing
 
 ```bash
+# Build the CLI binary
+make build
+
+# Install to GOPATH/bin
+make install
+
+# Run lint + vet + tests
+make check
+
 # Run all tests
 go test ./... -v
 
@@ -397,23 +423,9 @@ go test ./... -race
 go test ./protocols/modbus/ -v
 go test ./protocols/mms/ -v
 go test ./protocols/s7/ -v
-go test ./protocols/opcua/ -v
-go test ./protocols/bacnet/ -v
-go test ./protocols/can/ -v
-go test ./protocols/profinet/ -v
-go test ./protocols/dnp3/ -v
-go test ./protocols/iec104/ -v
-go test ./protocols/enip/ -v
 
 # Run fuzz tests (Go 1.18+)
 go test ./protocols/modbus/ -fuzz=FuzzValidateResponse -fuzztime=30s
-go test ./protocols/opcua/ -fuzz=FuzzValidateResponse -fuzztime=30s
-go test ./protocols/bacnet/ -fuzz=FuzzValidateResponse -fuzztime=30s
-go test ./protocols/can/ -fuzz=FuzzValidateResponse -fuzztime=30s
-go test ./protocols/profinet/ -fuzz=FuzzValidateResponse -fuzztime=30s
-go test ./protocols/dnp3/ -fuzz=FuzzValidateResponse -fuzztime=30s
-go test ./protocols/iec104/ -fuzz=FuzzValidateResponse -fuzztime=30s
-go test ./protocols/enip/ -fuzz=FuzzValidateResponse -fuzztime=30s
 ```
 
 ## License

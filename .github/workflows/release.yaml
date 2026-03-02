@@ -1,5 +1,5 @@
-name: Build and Release ot-discover
-run-name: "Build and Release of ot-discover on '${{ github.ref_name }}' with bump '${{ github.event.inputs.bump }}'"
+name: Build and Release otprobe
+run-name: "Build and Release of otprobe on '${{ github.ref_name }}' with bump '${{ github.event.inputs.bump }}'"
 
 on:
   workflow_dispatch:
@@ -38,7 +38,7 @@ jobs:
       - name: Bump version
         id: bump
         run: |
-          VERSION=$(cat version.txt)
+          VERSION=$(cat cmd/otprobe/version.txt)
           IFS='.' read -r major minor patch <<< "$VERSION"
           case "${{ github.event.inputs.bump }}" in
             major)
@@ -51,8 +51,8 @@ jobs:
               ;;
           esac
           NEW_VERSION="$major.$minor.$patch"
-          echo "$NEW_VERSION" > version.txt
-          git add version.txt
+          echo "$NEW_VERSION" > cmd/otprobe/version.txt
+          git add cmd/otprobe/version.txt
           if [[ "${{ github.event.inputs.bump }}" != "none" ]]; then
             git commit -m "Bump version to $NEW_VERSION"
             git push origin HEAD
@@ -61,7 +61,7 @@ jobs:
 
       - name: Show calculated version
         run: |
-          echo "🔖 Final version to build: $(cat version.txt)"
+          echo "🔖 Final version to build: $(cat cmd/otprobe/version.txt)"
 
   build:
     name: Build ${{ matrix.target }}
@@ -116,23 +116,23 @@ jobs:
           GOARCH: ${{ matrix.goarch }}
           GOARM: ${{ matrix.goarm }}
         run: |
-          echo "$VERSION" > version.txt
+          echo "$VERSION" > cmd/otprobe/version.txt
           BRANCH=$(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo "unknown")
           REVISION=$(git rev-parse --short HEAD 2>/dev/null || echo "unknown")
           BUILD_DATE=$(date -u +%Y%m%d-%H:%M:%S)
           LDFLAGS="-X main.Version=$VERSION -X main.Branch=$BRANCH -X main.Revision=$REVISION -X main.BuildUser=github-actions -X main.BuildDate=$BUILD_DATE"
 
           mkdir -p release
-          go build -ldflags "$LDFLAGS" -o "release/ot-discover${{ matrix.ext }}" ./cmd/ot-discover
-          tar -czf "release/ot-discover-${VERSION}-${{ matrix.target }}.tar.gz" -C release "ot-discover${{ matrix.ext }}"
-          rm -f "release/ot-discover${{ matrix.ext }}"
-          echo "Created release/ot-discover-${VERSION}-${{ matrix.target }}.tar.gz"
+          go build -ldflags "$LDFLAGS" -o "release/otprobe${{ matrix.ext }}" ./cmd/otprobe
+          tar -czf "release/otprobe-${VERSION}-${{ matrix.target }}.tar.gz" -C release "otprobe${{ matrix.ext }}"
+          rm -f "release/otprobe${{ matrix.ext }}"
+          echo "Created release/otprobe-${VERSION}-${{ matrix.target }}.tar.gz"
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: ot-discover-${{ needs.bump-version.outputs.version }}-${{ matrix.target }}
-          path: release/ot-discover-${{ needs.bump-version.outputs.version }}-${{ matrix.target }}.tar.gz
+          name: otprobe-${{ needs.bump-version.outputs.version }}-${{ matrix.target }}
+          path: release/otprobe-${{ needs.bump-version.outputs.version }}-${{ matrix.target }}.tar.gz
 
   create-github-release:
     name: Create GitHub Release
@@ -148,7 +148,7 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           path: artifacts
-          pattern: ot-discover-${{ needs.bump-version.outputs.version }}-*
+          pattern: otprobe-${{ needs.bump-version.outputs.version }}-*
           merge-multiple: true
 
       - name: List downloaded artifacts

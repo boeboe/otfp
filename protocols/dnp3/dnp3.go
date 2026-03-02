@@ -77,12 +77,12 @@ func buildProbe() []byte {
 	frame := make([]byte, 10)
 	frame[0] = startByte1
 	frame[1] = startByte2
-	frame[2] = 0x05            // Length: 5 bytes of data (control + dest + source)
+	frame[2] = 0x05                         // Length: 5 bytes of data (control + dest + source)
 	frame[3] = dirPrimary | fcLinkStatusReq // Control: DIR=1, PRM=0, FC=9
-	frame[4] = 0x01            // Destination address low
-	frame[5] = 0x00            // Destination address high
-	frame[6] = 0x00            // Source address low
-	frame[7] = 0x00            // Source address high
+	frame[4] = 0x01                         // Destination address low
+	frame[5] = 0x00                         // Destination address high
+	frame[6] = 0x00                         // Source address low
+	frame[7] = 0x00                         // Source address high
 
 	// Compute CRC-16 over bytes 0..7.
 	crc := crc16DNP(frame[0:8])

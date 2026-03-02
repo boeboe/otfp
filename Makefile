@@ -11,21 +11,21 @@ BIN_DIR := bin
 PKGS := $(shell go list ./...)
 
 # Version info
-VERSION := $(shell cat version.txt)
+VERSION := $(shell cat cmd/otprobe/version.txt)
 BRANCH := $(shell git rev-parse --abbrev-ref HEAD 2>/dev/null || echo unknown)
 REVISION := $(shell git rev-parse --short HEAD 2>/dev/null || echo unknown)
 BUILD_USER := $(shell whoami)
 BUILD_DATE := $(shell date -u +%Y%m%d-%H:%M:%S)
 LDFLAGS := -X main.Version=$(VERSION) -X main.Branch=$(BRANCH) -X main.Revision=$(REVISION) -X main.BuildUser=$(BUILD_USER) -X main.BuildDate=$(BUILD_DATE)
 
-all: build ## Default target: build ot-discover binary
+all: build ## Default target: build otprobe binary
 
-build: check ## Build ot-discover binary
+build: check ## Build otprobe binary
 	@mkdir -p $(BIN_DIR)
-	go build -ldflags "$(LDFLAGS)" -o $(BIN_DIR)/ot-discover ./cmd/ot-discover
+	go build -ldflags "$(LDFLAGS)" -o $(BIN_DIR)/otprobe ./cmd/otprobe
 
-install: build ## Install ot-discover to GOPATH/bin
-	go install -ldflags "$(LDFLAGS)" ./cmd/ot-discover
+install: build ## Install otprobe to GOPATH/bin
+	go install -ldflags "$(LDFLAGS)" ./cmd/otprobe
 
 lint: ## Run linter (golangci-lint preferred, fallback golint)
 	@echo "Running linter..."

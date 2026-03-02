@@ -18,9 +18,9 @@ const (
 	protocolName = core.ProtocolBACnet
 
 	// BVLC (BACnet Virtual Link Control) constants.
-	bvlcType           byte   = 0x81 // BACnet/IP (Annex J)
-	bvlcFuncUnicast    byte   = 0x0A // Original-Unicast-NPDU
-	bvlcHeaderSize     int    = 4    // Type(1) + Function(1) + Length(2)
+	bvlcType        byte = 0x81 // BACnet/IP (Annex J)
+	bvlcFuncUnicast byte = 0x0A // Original-Unicast-NPDU
+	bvlcHeaderSize  int  = 4    // Type(1) + Function(1) + Length(2)
 
 	// Minimal NPDU for WHO-IS (unconfirmed request).
 	npduVersion     byte = 0x01

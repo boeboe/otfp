@@ -63,7 +63,7 @@ func main() {
 // run is the real entry point. Returning an int keeps main() trivially testable.
 func run(args []string, stdout, stderr io.Writer) int {
 	// ---- flag parsing ----
-	fs := flag.NewFlagSet("ot-discover", flag.ContinueOnError)
+	fs := flag.NewFlagSet("otprobe", flag.ContinueOnError)
 	fs.SetOutput(stderr)
 
 	ip := fs.String("ip", "", "Target IP address (required)")
@@ -78,7 +78,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 	showVersion := fs.Bool("version", false, "Print version information and exit")
 
 	fs.Usage = func() {
-		_, _ = fmt.Fprintf(stderr, "Usage: ot-discover --ip <address> --port <port> [options]\n\n")
+		_, _ = fmt.Fprintf(stderr, "Usage: otprobe --ip <address> --port <port> [options]\n\n")
 		_, _ = fmt.Fprintf(stderr, "OT Protocol Fingerprinting Tool\n\n")
 		_, _ = fmt.Fprintf(stderr, "Options:\n")
 		fs.PrintDefaults()
@@ -105,7 +105,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 	}
 
 	// ---- version ----
-	build := core.BuildInfo{
+	build := BuildInfo{
 		Version:   Version,
 		Branch:    Branch,
 		Revision:  Revision,
@@ -114,14 +114,14 @@ func run(args []string, stdout, stderr io.Writer) int {
 	}
 
 	if *showVersion {
-		_, _ = fmt.Fprintf(stdout, "ot-discover %s\n", build.String())
+		_, _ = fmt.Fprintf(stdout, "otprobe %s\n", build.String())
 		return exitDetected
 	}
 
 	// ---- structured logger ----
 	logger := initLogger(stderr, *verbose)
 
-	logger.Info("starting ot-discover", "version", build.Short())
+	logger.Info("starting otprobe", "version", build.Short())
 
 	// ---- validate params ----
 	if *ip == "" {
