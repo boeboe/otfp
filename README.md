@@ -26,6 +26,21 @@ framing and handshake behavior — without invoking application-layer logic.
 | **IEC 60870-5-104** | APCI STARTDT_ACT/CON handshake | Single exchange |
 | **EtherNet/IP** | Encapsulation RegisterSession handshake | Single exchange |
 
+### Protocol Overview
+
+| Protocol | Description | Typical Use Case | Default Port |
+|---|---|---|---|
+| **Modbus TCP** | Simple request/response industrial protocol for reading and writing registers over TCP. | PLC communication, RTUs, industrial sensors, legacy automation systems. | 502 |
+| **IEC 61850 MMS** | Manufacturing Message Specification over ISO-on-TCP for substation automation. | Electrical substations, protection relays, SCADA in power grids. | 102 |
+| **Siemens S7comm** | Siemens proprietary protocol over ISO-on-TCP for PLC programming and runtime communication. | Siemens PLCs (S7-300/400/1200/1500) in factory automation. | 102 |
+| **OPC UA (Binary)** | Platform-independent, secure, service-oriented industrial communication protocol. | SCADA systems, Industry 4.0 integration, MES/ERP connectivity. | 4840 |
+| **BACnet/IP** | Building Automation and Control protocol using BVLL over IP networks. | HVAC, lighting control, building management systems (BMS). | 47808 |
+| **CAN (TCP Gateway)** | CAN bus access exposed via TCP through gateways (e.g., SLCAN ASCII). | Embedded systems, automotive testing, industrial field devices via IP bridge. | Varies (commonly 3000, 2000, vendor-specific) |
+| **PROFINET** | Industrial Ethernet standard for real-time automation, successor to PROFIBUS. | Factory automation, distributed I/O, motion control. | 34964 (RPC), also 34962–34964 |
+| **DNP3 (TCP)** | Distributed Network Protocol for reliable telemetry and control in utilities. | Electric power transmission/distribution, water utilities, remote RTUs. | 20000 |
+| **IEC 60870-5-104** | European SCADA protocol over TCP for telecontrol systems. | Substations, grid control centers, energy distribution networks. | 2404 |
+| **EtherNet/IP (CIP)** | Common Industrial Protocol over TCP/IP using encapsulation layer. | Rockwell / Allen-Bradley PLCs, industrial drives, factory automation. | 44818 |
+
 ### TCP Detectability Notes
 
 All protocols above are detectable over raw TCP connections. Some notes on
