@@ -42,11 +42,15 @@ vet: ## Run go vet on project packages
 	@echo "Running go vet on packages: $(PKGS)"
 	@go vet $(PKGS)
 
-test: ## Run all tests on project packages
-	@echo "Running tests on packages: $(PKGS)"
+test: ## Run fast tests
+	@echo "Running fast tests on packages: $(PKGS)"
 	@go test $(PKGS)
 
-check: lint vet test ## Run lint + vet + test
+test-race: ## Run tests with race detector (CI-like)
+	@echo "Running race tests on packages: $(PKGS)"
+	@go test -count=1 -timeout=120s -race $(PKGS)
+
+check: lint vet test test-race ## Run lint + vet + test
 
 clean: ## Remove generated binaries
 	@rm -rf $(BIN_DIR)
